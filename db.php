@@ -1,27 +1,24 @@
 <?php
-// db.php - Supabase PostgreSQL Connection Setup
+// db.php - Supabase IPv4 Connection Pooler
 
-// 1. Database Credentials
-$host     = 'db.dgiiteboqvtfrqbelqyj.supabase.co'; // Your Supabase Host domain
-$port     = '5432';                                 // Default PostgreSQL Port
-$db       = 'postgres';                             // Default Supabase Database Name
-$user     = 'postgres';                             // Default Supabase User
-$password = 'Wed05282017!2026';       // Replace with your real Supabase password
+$host     = 'aws-0-ap-southeast-1.pooler.supabase.com'; // Paste host from Step 2
+$port     = '6543';                                    // Pooler port (or 5432)
+$db       = 'postgres';
+$user     = 'postgres.dgiiteboqvtfrqbelqyj';            // Format: postgres.[PROJECT_ID]
 
-// 2. Data Source Name (DSN) - requires sslmode=require for Supabase
+// Reads password from Render Environment Variable, or uses local fallback
+$password = getenv('SUPABASE_PASSWORD') ?: 'Wed05282017!2026';
+
 $dsn = "pgsql:host={$host};port={$port};dbname={$db};sslmode=require";
 
-// 3. PDO Options
 $options = [
-    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION, // Throw exceptions on SQL errors
-    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,       // Return arrays indexed by column name
-    PDO::ATTR_EMULATE_PREPARES   => false,                  // Use real prepared statements
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
 ];
 
-// 4. Create Connection
 try {
     $pdo = new PDO($dsn, $user, $password, $options);
 } catch (PDOException $e) {
-    // If connection fails, display clear error message
     die("Database Connection Error: " . $e->getMessage());
 }
