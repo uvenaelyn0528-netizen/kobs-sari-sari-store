@@ -9,8 +9,8 @@ try {
     $totalSales    = $pdo->query("SELECT SUM(total_amount) FROM transactions")->fetchColumn() ?: 0;
     $totalProfit   = $pdo->query("SELECT SUM(total_profit) FROM transactions")->fetchColumn() ?: 0;
 
-    // Fetch low stock items (qty <= 5)
-    $lowStockStmt  = $pdo->query("SELECT product_name, stock_qty FROM products WHERE stock_qty <= 5 ORDER BY stock_qty ASC");
+    // Fetch low stock items (qty <= 5) along with product_code, stock_in, stock_out, and retail_price for Amount calculation
+    $lowStockStmt  = $pdo->query("SELECT product_code, product_name, stock_in, stock_out, stock_qty, retail_price FROM products WHERE stock_qty <= 5 ORDER BY stock_qty ASC");
     $lowStockItems = $lowStockStmt->fetchAll();
 } catch (PDOException $e) {
     echo "<div class='bg-red-100 text-red-700 p-4 rounded mb-4'>Error: " . $e->getMessage() . "</div>";
@@ -51,16 +51,28 @@ try {
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product Code</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock In</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Out</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Remaining Stock</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     <?php foreach ($lowStockItems as $item): ?>
+                        <?php 
+                            // Calculate Amount = Remaining Qty * Retail Price
+                            $amount = $item['stock_qty'] * $item['retail_price']; 
+                        ?>
                         <tr>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['product_code']) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($item['product_name']) ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['stock_in'] ?? 0) ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['stock_out'] ?? 0) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-bold"><?= $item['stock_qty'] ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-semibold">₱<?= number_format($amount, 2) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
                                     Restock Needed
