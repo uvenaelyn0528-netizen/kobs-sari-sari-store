@@ -1,3 +1,13 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+// Redirect to login if not authenticated
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,8 +16,10 @@
     <title>KOBS Store</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gray-100 min-h-screen font-sans leading-normal tracking-normal">
 
     <!-- Navigation Bar with Logo / Design -->
     <nav class="bg-indigo-700 shadow-md">
@@ -27,11 +39,23 @@
             </div>
 
             <!-- Navigation Links -->
-            <div class="flex space-x-1 sm:space-x-4 text-sm font-semibold">
+            <div class="flex items-center space-x-1 sm:space-x-4 text-sm font-semibold">
                 <a href="index.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Dashboard</a>
                 <a href="products.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Products</a>
                 <a href="credit.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Credit List</a>
-                <a href="stockout.php" class="text-white hover:text-gray-200 px-3 py-2 rounded-md font-medium">Stockout</a>
+                <a href="stockout.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Stockout</a>
+                
+                <!-- Role and Logout Section -->
+                <div class="ml-4 pl-4 border-l border-indigo-500 flex items-center space-x-3">
+                    <span class="text-xs bg-indigo-800 text-white px-2 py-1 rounded font-semibold uppercase">
+                        <?= htmlspecialchars($_SESSION['role'] ?? 'User') ?>
+                    </span>
+                    <a href="logout.php" class="bg-red-600 text-white hover:bg-red-700 px-3 py-2 rounded-md text-sm font-medium transition">
+                        <i class="fa-solid fa-power-off mr-1"></i> Logout
+                    </a>
+                </div>
             </div>
         </div>
     </nav>
+
+    <div class="container mx-auto py-6 px-4">
