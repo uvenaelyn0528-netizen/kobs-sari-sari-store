@@ -10,7 +10,7 @@ try {
     $totalProfit   = $pdo->query("SELECT SUM(total_profit) FROM transactions")->fetchColumn() ?: 0;
 
     // Fetch low stock items (qty <= 5) along with product_code, stock_in, stock_out, and retail_price for Amount calculation
-    $lowStockStmt  = $pdo->query("SELECT product_code, product_name, "Stock_in", "Stock_out", stock_qty, retail_price FROM products WHERE stock_qty <= 5 ORDER BY stock_qty ASC");
+    $lowStockStmt  = $pdo->query('SELECT product_code, product_name, "Stock_in", "Stock_out", stock_qty, retail_price FROM products WHERE stock_qty <= 5 ORDER BY stock_qty ASC');
     $lowStockItems = $lowStockStmt->fetchAll();
 } catch (PDOException $e) {
     echo "<div class='bg-red-100 text-red-700 p-4 rounded mb-4'>Error: " . $e->getMessage() . "</div>";
@@ -69,8 +69,8 @@ try {
                         <tr>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['product_code']) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"><?= htmlspecialchars($item['product_name']) ?></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['stock_in'] ?? 0) ?></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['stock_out'] ?? 0) ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['Stock_in'] ?? 0) ?></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?= htmlspecialchars($item['Stock_out'] ?? 0) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-bold"><?= $item['stock_qty'] ?></td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-semibold">₱<?= number_format($amount, 2) ?></td>
                             <td class="px-6 py-4 whitespace-nowrap">
