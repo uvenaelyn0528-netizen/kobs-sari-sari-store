@@ -25,8 +25,8 @@
                 <div class="flex space-x-4">
                     <a href="index.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-chart-line mr-1"></i> Dashboard</a>
                     <a href="products.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-box mr-1"></i> Products</a>
-                    <a href="categories.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-tags mr-1"></i> Categories</a>
-                    <a href="transactions.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-receipt mr-1"></i> Sales</a>
+                    <a href="credit.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-tags mr-1"></i> Credit List</a>
+                    <a href="stockout.php" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-indigo-600 transition"><i class="fa-solid fa-receipt mr-1"></i> Stock Out</a>
                 </div>
             </div>
         </div>
