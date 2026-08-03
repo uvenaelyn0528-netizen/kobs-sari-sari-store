@@ -31,6 +31,7 @@
                 <a href="index.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Dashboard</a>
                 <a href="products.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Products</a>
                 <a href="credit.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Credit List</a>
+                <a href="stockout.php" class="text-white hover:text-gray-200 px-3 py-2 rounded-md font-medium">Stockout</a>
             </div>
         </div>
     </nav>
