@@ -451,6 +451,14 @@ try {
 </div>
 
 <script>
+    <td class="px-3 py-3 text-center space-x-2">
+    <?php if (isset($_SESSION['role']) && $_SESSION['role'] === 'Admin'): ?>
+        <button onclick='editTransaction(<?= json_encode($s) ?>)' class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
+        <a href="stockout.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction? This will revert inventory and ledger balances.')" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
+    <?php else: ?>
+        <span class="text-gray-400 text-xs italic">Restricted</span>
+    <?php endif; ?>
+</td>
 function handleTransactionChange(val) {
     let productFields = document.getElementById('productFields');
     let customerContainer = document.getElementById('customerFieldContainer');
