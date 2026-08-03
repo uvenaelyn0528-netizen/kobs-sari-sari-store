@@ -2,8 +2,9 @@
 require_once 'db.php';
 include 'header.php';
 
-// Ensure $is_admin is defined (fallback if header was somehow bypassed)
+// Ensure $is_admin is defined
 $is_admin = isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin';
+$is_logged_in = isset($_SESSION['user_role']);
 
 $edit_mode = false;
 $edit_product = null;
@@ -33,10 +34,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
     }
 }
 
-// Handle Add Product Submission (Admin Only)
+// Handle Add Product Submission (Accessible to Admin & Tindera)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
-    if (!$is_admin) {
-        $message = "Unauthorized action! Only administrators can add products.";
+    if (!$is_logged_in) {
+        $message = "Unauthorized action!";
         $message_type = "error";
     } else {
         $code         = trim($_POST['product_code'] ?? '');
@@ -64,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
 // Handle Update Product Submission (Admin Only)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
     if (!$is_admin) {
-        $message = "Unauthorized action! Only administrators can update products.";
+        $message = "Unauthorized action! Only administrators can update existing products.";
         $message_type = "error";
     } else {
         $code         = trim($_POST['product_code'] ?? '');
@@ -131,6 +132,7 @@ try {
 <!-- Pass products data safely to JavaScript for barcode auto-fill -->
 <script>
     const productsData = <?= json_encode($products); ?>;
+    const isAdmin = <?= $is_admin ? 'true' : 'false' ?>;
 </script>
 
 <div class="container mx-auto px-4 py-8">
@@ -141,7 +143,7 @@ try {
     <?php endif; ?>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- Add / Edit Product Form (Admin Only) -->
+        <!-- Add / Edit Product Form -->
         <div class="bg-white p-6 rounded-xl shadow-md h-fit">
             <div class="flex justify-between items-center mb-4">
                 <h2 id="form-title" class="text-lg font-bold text-gray-800">
@@ -152,65 +154,66 @@ try {
                 <?php endif; ?>
             </div>
 
-            <?php if (!$is_admin): ?>
-                <div class="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-xl text-xs font-medium text-center">
-                    <p class="font-bold mb-1">View-Only Access</p>
-                    Tindera accounts can view the product inventory list, but adding, updating, or deleting items is restricted to Administrators.
+            <?php if (!$is_admin && $edit_mode): ?>
+                <div class="mb-4 bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-xl text-xs font-medium text-center">
+                    Tindera accounts cannot update or delete existing products. You can use this form to add new items.
                 </div>
-            <?php else: ?>
-                <form method="POST" class="space-y-4" id="product-form">
-                    <input type="hidden" name="original_id" id="original_id" value="<?= htmlspecialchars($edit_product['id'] ?? '') ?>">
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Product Code / Barcode</label>
-                        <input type="text" id="product_code" name="product_code" value="<?= htmlspecialchars($edit_product['product_code'] ?? '') ?>" placeholder="Scan or type barcode" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Product Name</label>
-                        <input type="text" id="product_name" name="product_name" required value="<?= htmlspecialchars($edit_product['product_name'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Category</label>
-                        <input type="text" id="category" name="category" list="category_list" required value="<?= htmlspecialchars($edit_product['category'] ?? '') ?>" placeholder="Select or type category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
-                        <datalist id="category_list">
-                            <?php foreach ($categories as $cat): ?>
-                                <option value="<?= htmlspecialchars($cat) ?>">
-                            <?php endforeach; ?>
-                        </datalist>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">UM (Unit of Measure)</label>
-                        <input type="text" id="um" name="um" required value="<?= htmlspecialchars($edit_product['um'] ?? 'pc') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                    </div>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Buy Price (₱)</label>
-                            <input type="number" step="0.01" id="buy_price" name="buy_price" required value="<?= htmlspecialchars($edit_product['buy_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Retail Price (₱)</label>
-                            <input type="number" step="0.01" id="retail_price" name="retail_price" required value="<?= htmlspecialchars($edit_product['retail_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700">Stock In</label>
-                            <input type="number" id="stock_in" name="stock_in" required value="<?= htmlspecialchars($edit_product['Stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700">Stock Out</label>
-                            <input type="number" id="stock_out" name="stock_out" required value="<?= htmlspecialchars($edit_product['Stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
-                            <input type="number" id="stock_qty" name="stock_qty" required value="<?= htmlspecialchars($edit_product['stock_qty'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        </div>
-                    </div>
+            <?php endif; ?>
 
-                    <!-- Form Action Buttons -->
-                    <div class="mt-6 pt-4 border-t border-gray-200">
-                        <div id="form-buttons">
-                            <?php if ($edit_mode): ?>
+            <form method="POST" class="space-y-4" id="product-form">
+                <input type="hidden" name="original_id" id="original_id" value="<?= htmlspecialchars($edit_product['id'] ?? '') ?>">
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Product Code / Barcode</label>
+                    <input type="text" id="product_code" name="product_code" value="<?= htmlspecialchars($edit_product['product_code'] ?? '') ?>" placeholder="Scan or type barcode" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Product Name</label>
+                    <input type="text" id="product_name" name="product_name" required value="<?= htmlspecialchars($edit_product['product_name'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Category</label>
+                    <input type="text" id="category" name="category" list="category_list" required value="<?= htmlspecialchars($edit_product['category'] ?? '') ?>" placeholder="Select or type category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <datalist id="category_list">
+                        <?php foreach ($categories as $cat): ?>
+                            <option value="<?= htmlspecialchars($cat) ?>">
+                        <?php endforeach; ?>
+                    </datalist>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">UM (Unit of Measure)</label>
+                    <input type="text" id="um" name="um" required value="<?= htmlspecialchars($edit_product['um'] ?? 'pc') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Buy Price (₱)</label>
+                        <input type="number" step="0.01" id="buy_price" name="buy_price" required value="<?= htmlspecialchars($edit_product['buy_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Retail Price (₱)</label>
+                        <input type="number" step="0.01" id="retail_price" name="retail_price" required value="<?= htmlspecialchars($edit_product['retail_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700">Stock In</label>
+                        <input type="number" id="stock_in" name="stock_in" required value="<?= htmlspecialchars($edit_product['Stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700">Stock Out</label>
+                        <input type="number" id="stock_out" name="stock_out" required value="<?= htmlspecialchars($edit_product['Stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
+                        <input type="number" id="stock_qty" name="stock_qty" required value="<?= htmlspecialchars($edit_product['stock_qty'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                </div>
+
+                <!-- Form Action Buttons -->
+                <div class="mt-6 pt-4 border-t border-gray-200">
+                    <div id="form-buttons">
+                        <?php if ($edit_mode): ?>
+                            <?php if ($is_admin): ?>
                                 <div class="space-y-2">
                                     <button type="submit" name="update_product" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold text-center shadow">
                                         Update Product
@@ -225,23 +228,32 @@ try {
                                     </div>
                                 </div>
                             <?php else: ?>
-                                <div>
-                                    <button type="submit" name="add_product" id="submit_btn" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
-                                        Save Product
+                                <div class="space-y-2">
+                                    <button type="submit" name="add_product" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
+                                        Save as New Product
                                     </button>
+                                    <a href="products.php" class="w-full bg-gray-500 text-white py-2 px-4 rounded-md text-center hover:bg-gray-600 transition font-semibold shadow block">
+                                        Clear / Cancel
+                                    </a>
                                 </div>
                             <?php endif; ?>
-                        </div>
+                        <?php else: ?>
+                            <div>
+                                <button type="submit" name="add_product" id="submit_btn" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
+                                    Save Product
+                                </button>
+                            </div>
+                        <?php endif; ?>
                     </div>
-                </form>
-            <?php endif; ?>
+                </div>
+            </form>
         </div>
 
         <!-- Product List Table -->
         <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
             <h2 class="text-lg font-bold text-gray-800 mb-1">Inventory List</h2>
             <p class="text-xs text-gray-500 mb-4">
-                <?= $is_admin ? 'Click any row or use the Action button to load product details into the edit form.' : 'Viewing current store inventory.' ?>
+                <?= $is_admin ? 'Click any row or use the Action button to load product details into the edit form.' : 'Scanning an existing barcode will load details; saving will record it as a new entry.' ?>
             </p>
             <div class="max-h-[600px] overflow-y-auto overflow-x-auto relative">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -314,16 +326,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const barcodeInput = document.getElementById('product_code');
     if (!barcodeInput) return;
 
-    // Only auto-fill if we aren't already locked into a specific URL edit mode
     const isUrlEditing = <?= $edit_mode ? 'true' : 'false' ?>;
 
     barcodeInput.addEventListener('input', function() {
-        if (isUrlEditing) return; // Don't override if user is explicitly editing via URL id
+        if (isUrlEditing && isAdmin) return; 
 
         const enteredCode = this.value.trim();
         if (enteredCode === '') return;
 
-        // Search productsData for a matching barcode/product_code
         const matchedProduct = productsData.find(p => p.product_code && p.product_code.trim() === enteredCode);
 
         const formTitle = document.getElementById('form-title');
@@ -331,7 +341,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const formButtons = document.getElementById('form-buttons');
 
         if (matchedProduct) {
-            // Found existing product: Auto-fill fields and switch to update mode
+            // Auto-fill values from matched barcode
             document.getElementById('product_name').value = matchedProduct.product_name || '';
             document.getElementById('category').value = matchedProduct.category || '';
             document.getElementById('um').value = matchedProduct.um || 'pc';
@@ -342,26 +352,34 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('stock_qty').value = matchedProduct.stock_qty || '';
             originalIdInput.value = matchedProduct.id || '';
 
-            formTitle.textContent = 'Edit Product (Existing Barcode)';
-            
-            // Switch save button to update button dynamically
-            formButtons.innerHTML = `
-                <div class="space-y-2">
-                    <button type="submit" name="update_product" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold text-center shadow">
-                        Update Product
-                    </button>
-                    <div class="flex gap-2">
-                        <button type="submit" name="delete_product" onclick="return confirm('Are you sure you want to delete this product?');" class="w-1/2 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition font-semibold text-center shadow">
-                            Delete
+            if (isAdmin) {
+                formTitle.textContent = 'Edit Product (Existing Barcode)';
+                formButtons.innerHTML = `
+                    <div class="space-y-2">
+                        <button type="submit" name="update_product" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold text-center shadow">
+                            Update Product
                         </button>
-                        <a href="products.php" class="w-1/2 bg-gray-500 text-white py-2 px-4 rounded-md text-center hover:bg-gray-600 transition font-semibold shadow flex items-center justify-center">
-                            Cancel
-                        </a>
+                        <div class="flex gap-2">
+                            <button type="submit" name="delete_product" onclick="return confirm('Are you sure you want to delete this product?');" class="w-1/2 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition font-semibold text-center shadow">
+                                Delete
+                            </button>
+                            <a href="products.php" class="w-1/2 bg-gray-500 text-white py-2 px-4 rounded-md text-center hover:bg-gray-600 transition font-semibold shadow flex items-center justify-center">
+                                Cancel
+                            </a>
+                        </div>
                     </div>
-                </div>
-            `;
+                `;
+            } else {
+                formTitle.textContent = 'Add Product from Barcode Template';
+                formButtons.innerHTML = `
+                    <div>
+                        <button type="submit" name="add_product" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
+                            Save as New Product
+                        </button>
+                    </div>
+                `;
+            }
         } else {
-            // New product: Clear fields except barcode and switch back to 'Add' mode
             originalIdInput.value = '';
             document.getElementById('product_name').value = '';
             document.getElementById('category').value = '';
