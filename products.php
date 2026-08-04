@@ -292,6 +292,18 @@ document.getElementById('product_code_input').addEventListener('input', function
             .catch(err => console.error('Error fetching barcode:', err));
     }
 });
+
+// ILAGAY DITO ANG BAGONG SCRIPT PARA SA AUTO-COMPUTE NG REMAINING QTY:
+function calculateRemaining() {
+    let stockIn = parseFloat(document.getElementById('stock_in_input').value) || 0;
+    let stockOut = parseFloat(document.getElementById('stock_out_input').value) || 0;
+    let remaining = stockIn - stockOut;
+    
+    document.getElementById('stock_qty_input').value = remaining >= 0 ? remaining : 0;
+}
+
+document.getElementById('stock_in_input').addEventListener('input', calculateRemaining);
+document.getElementById('stock_out_input').addEventListener('input', calculateRemaining);
 </script>
 
 </body>
