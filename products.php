@@ -236,7 +236,9 @@ try {
                                     $p_um     = $p['um'] ?? '';
                                     $p_in     = $p['Stock_in'] ?? 0;
                                     $p_out    = $p['Stock_out'] ?? 0;
-                                    $p_qty    = $p['stock_qty'] ?? 0;
+                                    $p_in     = $p['Stock_in'] ?? 0;
+$p_out    = $p['Stock_out'] ?? 0;
+$p_qty    = $p_in - $p_out; // Kusang magkakalkula: Stock In minus Stock Out
                                     $p_ret    = $p['retail_price'] ?? 0;
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
