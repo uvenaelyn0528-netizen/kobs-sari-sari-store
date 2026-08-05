@@ -270,26 +270,23 @@ try {
 
     $today = date('Y-m-d');
 
-    // Total Sales for Today (Cash + Payment for Today) -> Basis for Actual Cash on Hand
     $sumSalesToday = $pdo->prepare("SELECT SUM(total_amount) as total_sales FROM stockouts WHERE remarks IN ('Cash', 'Payment') AND date_sold = ?");
     $sumSalesToday->execute([$today]);
     $total_sales_today = $sumSalesToday->fetch(PDO::FETCH_ASSOC)['total_sales'] ?? 0;
 
-    // Payment for Today Only
     $sumPaymentToday = $pdo->prepare("SELECT SUM(total_amount) as total_payment FROM stockouts WHERE remarks = 'Payment' AND date_sold = ?");
     $sumPaymentToday->execute([$today]);
     $total_payment_today = $sumPaymentToday->fetch(PDO::FETCH_ASSOC)['total_payment'] ?? 0;
 
-    // Cash Sales for Today Only
     $sumCashToday = $pdo->prepare("SELECT SUM(total_amount) as total_cash FROM stockouts WHERE remarks = 'Cash' AND date_sold = ?");
     $sumCashToday->execute([$today]);
     $total_cash_today = $sumCashToday->fetch(PDO::FETCH_ASSOC)['total_cash'] ?? 0;
 
-    // Total Credit Accumulation = Credit + Balance
     $sumCredit = $pdo->query("SELECT SUM(total_amount) as total_credit FROM stockouts WHERE remarks IN ('Credit', 'Balance')");
     $total_credit_res = $sumCredit->fetch(PDO::FETCH_ASSOC)['total_credit'] ?? 0;
 
-    $stmt = $pdo->query("SELECT * FROM stockouts ORDER BY id DESC");
+    // Limit fetched history to the last 100 transactions to speed up initial page load
+    $stmt = $pdo->query("SELECT * FROM stockouts ORDER BY id DESC LIMIT 100");
     $stockouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
@@ -348,7 +345,7 @@ try {
                     </select>
                 </div>
 
-                <!-- Product Fields (Hidden for Payment/Balance) -->
+                <!-- Product Fields -->
                 <div id="productFields">
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-gray-700">Product Barcode / Code</label>
@@ -360,13 +357,13 @@ try {
                     </div>
                 </div>
 
-                <!-- Custom Amount Field (Shown only for Payment or Balance) -->
+                <!-- Custom Amount Field -->
                 <div id="amountFieldContainer" class="hidden">
                     <label class="block text-sm font-medium text-gray-700" id="amountLabel">Amount (₱)</label>
                     <input type="number" step="0.01" name="custom_amount" id="customAmountInput" value="0.00" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                 </div>
 
-                <!-- Customer Field (Shown for Credit, Payment, Balance) -->
+                <!-- Customer Field -->
                 <div id="customerFieldContainer" class="hidden">
                     <label class="block text-sm font-medium text-gray-700">Customer Name</label>
                     <select name="customer_name" id="customerSelect" onchange="handleCustomerSelectChange(this)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
@@ -451,14 +448,6 @@ try {
 </div>
 
 <script>
-    <td class="px-3 py-3 text-center space-x-2">
-    <?php if (isset($_SESSION['role']) && $_SESSION['role'] === 'Admin'): ?>
-        <button onclick='editTransaction(<?= json_encode($s) ?>)' class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
-        <a href="stockout.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction? This will revert inventory and ledger balances.')" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
-    <?php else: ?>
-        <span class="text-gray-400 text-xs italic">Restricted</span>
-    <?php endif; ?>
-</td>
 function handleTransactionChange(val) {
     let productFields = document.getElementById('productFields');
     let customerContainer = document.getElementById('customerFieldContainer');
@@ -488,6 +477,7 @@ function handleTransactionChange(val) {
         amountContainer.classList.add('hidden');
         document.getElementById('customAmountInput').removeAttribute('required');
 
+        // Dito ipinapakita ang customer field kapag Credit, at itatago naman kapag Cash
         if (val === 'Credit') {
             customerContainer.classList.remove('hidden');
             customerSelect.setAttribute('required', 'required');
@@ -555,15 +545,13 @@ function editTransaction(tx) {
 
     document.getElementById('dateSoldInput').value = tx.date_sold;
     document.getElementById('formTitle').textContent = "Edit Transaction (ID: " + tx.id + ")";
+    document.getElementById('cancelEditBtn').classList.remove('hidden');
     document.getElementById('submitBtn').textContent = "Update Transaction";
     document.getElementById('submitBtn').classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
     document.getElementById('submitBtn').classList.add('bg-amber-600', 'hover:bg-amber-700');
-    document.getElementById('cancelEditBtn').classList.remove('hidden');
-
-    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// Live search stockout table
+// Search filter for history log table
 document.getElementById('searchStockout').addEventListener('keyup', function() {
     let filter = this.value.toLowerCase();
     let rows = document.querySelectorAll('#stockoutTable tbody tr');
@@ -573,6 +561,3 @@ document.getElementById('searchStockout').addEventListener('keyup', function() {
     });
 });
 </script>
-
-</body>
-</html>
