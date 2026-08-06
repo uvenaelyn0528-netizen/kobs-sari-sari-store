@@ -18,7 +18,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($user && (password_verify($password, $user['password']) || $password === $user['password'])) {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['username'] = $user['username'];
-            $_SESSION['role'] = $user['role']; // 'Admin' or 'Tindera'
+            // Normalized role session mapping ('admin', 'gcash_incharge', 'tindera')
+            $_SESSION['role'] = strtolower(str_replace(' ', '_', $user['role'])); 
 
             header('Location: index.php');
             exit;
