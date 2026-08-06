@@ -8,11 +8,9 @@ if (session_status() === PHP_SESSION_NONE) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KOBS Store - Sari-Sari Inventory & POS</title>
+    <title>KOBS COOP - Sari-Sari Inventory & POS</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Alpine.js for dropdown interactivity -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col">
 
@@ -21,15 +19,15 @@ if (session_status() === PHP_SESSION_NONE) {
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
             <!-- Brand Logo / Name -->
             <div class="flex items-center space-x-2">
-                <a href="dashboard.php" class="text-xl font-bold tracking-wide flex items-center gap-2">
-                    🛍️ <span class="text-teal-400">KOBS</span> Store
+                <a href="index.php" class="text-xl font-bold tracking-wide flex items-center gap-2">
+                    🛍️ <span class="text-teal-400">KOBS</span> COOP
                 </a>
             </div>
 
             <!-- Navigation Links -->
             <div class="flex items-center space-x-6">
-                <!-- Store Link (Redirects to dashboard.php) -->
-                <a href="dashboard.php" class="font-medium hover:text-teal-300 transition">Store</a>
+                <!-- Store Link (Redirects to store.php) -->
+                <a href="store.php" class="font-medium hover:text-teal-300 transition">Store</a>
 
                 <!-- Lending Link -->
                 <a href="lending.php" class="font-medium hover:text-teal-300 transition">Lending</a>
