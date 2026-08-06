@@ -1,5 +1,13 @@
 <?php
+session_start();
 require_once 'db.php';
+
+// Check if user is logged in and has an 'admin' or 'tindera' role
+if (!isset($_SESSION['role']) || !in_array($_SESSION['role'], ['admin', 'tindera'])) {
+    header("Location: login.php"); // Redirect to your login page if unauthorized
+    exit();
+}
+
 include 'header.php';
 
 $edit_mode = false;
@@ -246,7 +254,7 @@ try {
                                     $p_um     = $p['um'] ?? '';
                                     $p_in     = $p['Stock_in'] ?? 0;
                                     $p_out    = $p['Stock_out'] ?? 0;
-                                    $p_qty    = $p_in - $p_out; // Kusang magkakalkula: Stock In minus Stock Out
+                                    $p_qty    = $p_in - $p_out; 
                                     $p_ret    = $p['retail_price'] ?? 0;
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
@@ -280,7 +288,7 @@ try {
 </div>
 
 <script>
-// Barcode scanner listener (triggered on input change or scanner 'Enter' key)
+// Barcode scanner listener
 document.getElementById('product_code_input').addEventListener('input', function() {
     let barcode = this.value.trim();
     if (barcode.length > 1) {
@@ -303,7 +311,7 @@ document.getElementById('product_code_input').addEventListener('input', function
     }
 });
 
-// ILAGAY DITO ANG BAGONG SCRIPT PARA SA AUTO-COMPUTE NG REMAINING QTY:
+// Auto-compute remaining quantity
 function calculateRemaining() {
     let stockIn = parseFloat(document.getElementById('stock_in_input').value) || 0;
     let stockOut = parseFloat(document.getElementById('stock_out_input').value) || 0;
