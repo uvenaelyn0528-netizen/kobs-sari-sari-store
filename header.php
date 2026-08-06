@@ -46,7 +46,7 @@ if (!isset($_SESSION['user_id'])) {
                 <a href="stockout.php" class="text-indigo-100 hover:bg-indigo-600 px-3 py-2 rounded-md transition">Stockout</a>
                 
                 <!-- Lending Button sa tabi ng Stockout -->
-                <a href="stockout.php" onclick="setTimeout(() => { if(typeof setQuickLending === 'function') setQuickLending(); }, 200);" class="bg-teal-600 hover:bg-teal-700 text-white px-3 py-2 rounded-md transition flex items-center gap-1.5 shadow">
+                <a href="lending.php" onclick="setTimeout(() => { if(typeof setQuickLending === 'function') setQuickLending(); }, 200);" class="bg-teal-600 hover:bg-teal-700 text-white px-3 py-2 rounded-md transition flex items-center gap-1.5 shadow">
                     <i class="fa-solid fa-handshake"></i> Lending
                 </a>
                 
