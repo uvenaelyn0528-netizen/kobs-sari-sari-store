@@ -109,6 +109,16 @@ try {
 ?>
 
 <div class="container mx-auto px-4 py-8">
+    <!-- Back Button -->
+    <div class="mb-6">
+        <a href="javascript:history.back()" class="inline-flex items-center px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-md shadow-sm transition">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Back
+        </a>
+    </div>
+
     <?php if (!empty($message)): ?>
         <div class="mb-4 p-3 rounded <?= $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>">
             <?= htmlspecialchars($message) ?>
@@ -236,9 +246,7 @@ try {
                                     $p_um     = $p['um'] ?? '';
                                     $p_in     = $p['Stock_in'] ?? 0;
                                     $p_out    = $p['Stock_out'] ?? 0;
-                                    $p_in     = $p['Stock_in'] ?? 0;
-$p_out    = $p['Stock_out'] ?? 0;
-$p_qty    = $p_in - $p_out; // Kusang magkakalkula: Stock In minus Stock Out
+                                    $p_qty    = $p_in - $p_out; // Kusang magkakalkula: Stock In minus Stock Out
                                     $p_ret    = $p['retail_price'] ?? 0;
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
