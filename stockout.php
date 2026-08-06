@@ -299,6 +299,19 @@ try {
 ?>
 
 <div class="container mx-auto px-4 py-8">
+    
+    <!-- Title Section & Back Button -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">KOBS Sari-Sari Store Transactions</h1>
+        </div>
+        <div>
+            <a href="store.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
+                &larr; Back to Store
+            </a>
+        </div>
+    </div>
+
     <?php if (!empty($message)): ?>
         <div class="mb-4 p-3 rounded <?= $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>">
             <?= htmlspecialchars($message) ?>
@@ -477,7 +490,6 @@ function handleTransactionChange(val) {
         amountContainer.classList.add('hidden');
         document.getElementById('customAmountInput').removeAttribute('required');
 
-        // Dito ipinapakita ang customer field kapag Credit, at itatago naman kapag Cash
         if (val === 'Credit') {
             customerContainer.classList.remove('hidden');
             customerSelect.setAttribute('required', 'required');
@@ -561,3 +573,6 @@ document.getElementById('searchStockout').addEventListener('keyup', function() {
     });
 });
 </script>
+
+</body>
+</html>
