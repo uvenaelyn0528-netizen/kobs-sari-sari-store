@@ -26,7 +26,7 @@ include 'header.php';
         </a>
 
         <!-- Credit List Button -->
-        <a href="credit_list.php" class="bg-white p-8 rounded-xl shadow-md hover:shadow-xl border-t-4 border-teal-600 transition transform hover:-translate-y-1 text-center group">
+        <a href="credit.php" class="bg-white p-8 rounded-xl shadow-md hover:shadow-xl border-t-4 border-teal-600 transition transform hover:-translate-y-1 text-center group">
             <div class="text-4xl mb-4">📝</div>
             <h2 class="text-xl font-bold text-gray-800 group-hover:text-teal-600 transition">Credit List</h2>
             <p class="text-sm text-gray-500 mt-2">Tingnan ang listahan ng mga utang at balanse ng mga customer.</p>
