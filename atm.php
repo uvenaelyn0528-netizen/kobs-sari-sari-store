@@ -5,7 +5,7 @@ include 'header.php';
 $message = '';
 $message_type = '';
 
-// Master list of customers para sa dropdown
+// Master list ng customers para sa dropdown
 $master_customer_list = [
     "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
     "Aguilo, Kim", "Aguindao, Omar", "Albia, Jhonmark", "Amoguis, Joshua Rheynaird", 
@@ -80,11 +80,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_atm'])) {
         }
 
         $total_withdrawal = $atm_amount + $atm_fee;
-        $product_desc = "Withdrawal: ₱" . number_format($atm_amount, 2) . " + Fee: ₱" . number_format($atm_fee, 2);
+        // Gagamitin ang product_name para itabi ang halaga ng withdrawal, at ang total_amount para sa (Amount + Charge)
+        $product_desc = "Withdrawal: ₱" . number_format($atm_amount, 2);
 
-        // I-save sa stockouts table (gamit ang remarks = 'ATM Withdrawal')
-        $stmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES ('ATM', ?, 1, 'ATM Withdrawal', ?, ?, 'ATM Services', ?)");
-        $stmt->execute([$date_sold, $customer_name, $product_desc, $total_withdrawal]);
+        // I-save sa stockouts table (gamit ang remarks = 'ATM Withdrawal', product_code = fee para ma-store natin ang charge)
+        $stmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, 1, 'ATM Withdrawal', ?, ?, 'ATM Services', ?)");
+        $stmt->execute([$atm_fee, $date_sold, $customer_name, $product_desc, $total_withdrawal]);
 
         $message = "ATM Withdrawal naitala nang matagumpay!";
         $message_type = "success";
@@ -146,7 +147,7 @@ try {
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700">Fee / Charges (₱)</label>
+                    <label class="block text-sm font-medium text-gray-700">Fee / Charge (₱)</label>
                     <input type="number" step="0.01" name="atm_fee" id="atmFee" value="0.00" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                 </div>
 
@@ -177,6 +178,7 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Date</th>
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Customer Name</th>
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Details</th>
+                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Charge</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Total Amount</th>
                             <?php if ($is_admin): ?>
                                 <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Action</th>
@@ -185,11 +187,14 @@ try {
                     </thead>
                     <tbody class="divide-y divide-gray-200 text-sm bg-white">
                         <?php if (!empty($atm_records)): ?>
-                            <?php foreach ($atm_records as $row): ?>
+                            <?php foreach ($atm_records as $row): 
+                                $charge = floatval($row['product_code']); // Nakatabi dito ang fee/charge
+                            ?>
                                 <tr class="hover:bg-gray-50 transition">
                                     <td class="px-3 py-3 text-gray-600"><?= htmlspecialchars($row['date_sold']) ?></td>
                                     <td class="px-3 py-3 text-gray-800 font-medium"><?= htmlspecialchars($row['customer_name']) ?></td>
                                     <td class="px-3 py-3 text-gray-600 text-xs"><?= htmlspecialchars($row['product_name']) ?></td>
+                                    <td class="px-3 py-3 text-right text-gray-700 font-medium">₱<?= number_format($charge, 2) ?></td>
                                     <td class="px-3 py-3 text-right font-bold text-emerald-700">₱<?= number_format($row['total_amount'], 2) ?></td>
                                     
                                     <?php if ($is_admin): ?>
@@ -201,7 +206,7 @@ try {
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="<?= $is_admin ? 5 : 4 ?>" class="px-4 py-4 text-center text-gray-500">Walang nakitang rekord ng ATM.</td>
+                                <td colspan="<?= $is_admin ? 6 : 5 ?>" class="px-4 py-4 text-center text-gray-500">Walang nakitang rekord ng ATM.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
