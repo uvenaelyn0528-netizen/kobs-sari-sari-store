@@ -1,5 +1,6 @@
 <?php
 require_once 'db.php';
+include 'header.php';
 
 // Kunin ang kabuuang total para sa mga kard sa taas
 try {
@@ -20,29 +21,12 @@ try {
     $credits = [];
 }
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KOBS Sari-Sari Store Credit list</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 min-h-screen flex flex-col">
 
 <div class="container mx-auto px-4 py-8">
     
-    <!-- Top Navigation / Back Button & Title Section -->
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-800">KOBS Sari-Sari Store Credit list</h1>
-        </div>
-        <div>
-            <a href="store.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
-                &larr; Back to Store
-            </a>
-        </div>
+    <!-- Title Section katulad ng sa larawan -->
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">KOBS Sari-Sari Store Credit list</h1>
     </div>
 
     <!-- Summary Cards -->
@@ -120,6 +104,3 @@ document.getElementById('searchCredit').addEventListener('keyup', function() {
     });
 });
 </script>
-
-</body>
-</html>
