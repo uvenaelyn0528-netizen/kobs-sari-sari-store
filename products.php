@@ -2,11 +2,14 @@
 session_start();
 require_once 'db.php';
 
-// Check if user is logged in and has an 'admin' or 'tindera' role
-if (!isset($_SESSION['role']) || !in_array($_SESSION['role'], ['admin', 'tindera'])) {
-    header("Location: login.php"); // Redirect to your login page if unauthorized
+// Allow 'admin', 'tindera', and 'viewer' to open the page
+if (!isset($_SESSION['role']) || !in_array($_SESSION['role'], ['admin', 'tindera', 'viewer'])) {
+    header("Location: login.php");
     exit();
 }
+
+$user_role = $_SESSION['role'];
+$is_viewer = ($user_role === 'viewer');
 
 include 'header.php';
 
@@ -15,8 +18,8 @@ $edit_product = null;
 $message = '';
 $message_type = '';
 
-// Handle Delete Product
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
+// Handle Delete Product (Blocked for viewers)
+if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
     $del_id = $_POST['original_id'] ?? '';
     if (!empty($del_id)) {
         try {
@@ -33,8 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
     }
 }
 
-// Handle Add Product Submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
+// Handle Add Product Submission (Blocked for viewers)
+if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
     $code         = trim($_POST['product_code'] ?? '');
     $name         = $_POST['product_name'] ?? '';
     $category     = $_POST['category'] ?? '';
@@ -56,8 +59,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
     }
 }
 
-// Handle Update Product Submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
+// Handle Update Product Submission (Blocked for viewers)
+if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
     $code         = trim($_POST['product_code'] ?? '');
     $name         = $_POST['product_name'] ?? '';
     $category     = $_POST['category'] ?? '';
@@ -82,8 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
     }
 }
 
-// Handle Edit Trigger via URL
-if (isset($_GET['edit']) && !empty($_GET['edit'])) {
+// Handle Edit Trigger via URL (Blocked for viewers)
+if (!$is_viewer && isset($_GET['edit']) && !empty($_GET['edit'])) {
     $edit_id = $_GET['edit'];
     try {
         $stmt = $pdo->prepare('SELECT * FROM products WHERE id = ?');
@@ -133,8 +136,14 @@ try {
         </div>
     <?php endif; ?>
 
+    <?php if ($is_viewer): ?>
+        <div class="mb-6 p-4 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
+            <strong>Viewer Mode:</strong> You are logged in with a viewer account. You can view the product inventory list, but transaction forms and modifications are restricted.
+        </div>
+    <?php endif; ?>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- Add / Edit Product Form -->
+        <!-- Add / Edit Product Form (Hidden or Disabled for Viewers) -->
         <div class="bg-white p-6 rounded-xl shadow-md h-fit">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-gray-800">
@@ -151,15 +160,15 @@ try {
                 <?php endif; ?>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Product Code / Barcode</label>
-                    <input type="text" id="product_code_input" name="product_code" value="<?= htmlspecialchars($edit_product['product_code'] ?? '') ?>" placeholder="Scan or type barcode" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500">
+                    <input type="text" id="product_code_input" name="product_code" <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['product_code'] ?? '') ?>" placeholder="Scan or type barcode" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500 <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Product Name</label>
-                    <input type="text" id="product_name_input" name="product_name" required value="<?= htmlspecialchars($edit_product['product_name'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    <input type="text" id="product_name_input" name="product_name" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['product_name'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Category</label>
-                    <input type="text" id="category_input" name="category" list="category_list" required value="<?= htmlspecialchars($edit_product['category'] ?? '') ?>" placeholder="Select or type category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <input type="text" id="category_input" name="category" list="category_list" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['category'] ?? '') ?>" placeholder="Select or type category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     <datalist id="category_list">
                         <?php foreach ($categories as $cat): ?>
                             <option value="<?= htmlspecialchars($cat) ?>">
@@ -168,70 +177,78 @@ try {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">UM (Unit of Measure)</label>
-                    <input type="text" id="um_input" name="um" required value="<?= htmlspecialchars($edit_product['um'] ?? 'pc') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    <input type="text" id="um_input" name="um" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['um'] ?? 'pc') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Buy Price (₱)</label>
-                        <input type="number" step="0.01" id="buy_price_input" name="buy_price" required value="<?= htmlspecialchars($edit_product['buy_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" step="0.01" id="buy_price_input" name="buy_price" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['buy_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Retail Price (₱)</label>
-                        <input type="number" step="0.01" id="retail_price_input" name="retail_price" required value="<?= htmlspecialchars($edit_product['retail_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" step="0.01" id="retail_price_input" name="retail_price" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['retail_price'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                 </div>
                 <div class="grid grid-cols-3 gap-2">
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Stock In</label>
-                        <input type="number" id="stock_in_input" name="stock_in" required value="<?= htmlspecialchars($edit_product['Stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" id="stock_in_input" name="stock_in" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Stock Out</label>
-                        <input type="number" id="stock_out_input" name="stock_out" required value="<?= htmlspecialchars($edit_product['Stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" id="stock_out_input" name="stock_out" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
-                        <input type="number" id="stock_qty_input" name="stock_qty" required value="<?= htmlspecialchars($edit_product['stock_qty'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['stock_qty'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                 </div>
 
                 <!-- Form Action Buttons -->
-                <div class="mt-6 pt-4 border-t border-gray-200">
-                    <?php if ($edit_mode): ?>
-                        <div class="space-y-2">
-                            <button type="submit" name="update_product" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold text-center shadow">
-                                Update Product
-                            </button>
-                            <div class="flex gap-2">
-                                <button type="submit" name="delete_product" onclick="return confirm('Are you sure you want to delete this product?');" class="w-1/2 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition font-semibold text-center shadow">
-                                    Delete
+                <?php if (!$is_viewer): ?>
+                    <div class="mt-6 pt-4 border-t border-gray-200">
+                        <?php if ($edit_mode): ?>
+                            <div class="space-y-2">
+                                <button type="submit" name="update_product" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold text-center shadow">
+                                    Update Product
                                 </button>
-                                <a href="products.php" class="w-1/2 bg-gray-500 text-white py-2 px-4 rounded-md text-center hover:bg-gray-600 transition font-semibold shadow flex items-center justify-center">
-                                    Cancel
-                                </a>
+                                <div class="flex gap-2">
+                                    <button type="submit" name="delete_product" onclick="return confirm('Are you sure you want to delete this product?');" class="w-1/2 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition font-semibold text-center shadow">
+                                        Delete
+                                    </button>
+                                    <a href="products.php" class="w-1/2 bg-gray-500 text-white py-2 px-4 rounded-md text-center hover:bg-gray-600 transition font-semibold shadow flex items-center justify-center">
+                                        Cancel
+                                    </a>
+                                </div>
                             </div>
-                        </div>
-                    <?php else: ?>
-                        <div>
-                            <button type="submit" name="add_product" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
-                                Save Product
-                            </button>
-                        </div>
-                    <?php endif; ?>
-                </div>
+                        <?php else: ?>
+                            <div>
+                                <button type="submit" name="add_product" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
+                                    Save Product
+                                </button>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="mt-6 pt-4 border-t border-gray-200 text-center text-xs text-gray-400">
+                        Actions disabled for viewer accounts.
+                    </div>
+                <?php endif; ?>
             </form>
         </div>
 
         <!-- Product List Table -->
         <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
             <h2 class="text-lg font-bold text-gray-800 mb-1">Inventory List</h2>
-            <p class="text-xs text-gray-500 mb-4">Click any row or use the Action button to load product details into the edit form.</p>
+            <p class="text-xs text-gray-500 mb-4"><?= $is_viewer ? 'Viewing inventory list records.' : 'Click any row or use the Action button to load product details into the edit form.' ?></p>
             
             <div class="max-h-[600px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg pb-2">
                 <table class="min-w-[850px] w-full divide-y divide-gray-200">
                     <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
                         <tr>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Action</th>
+                            <?php if (!$is_viewer): ?>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Action</th>
+                            <?php endif; ?>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Product Code / Barcode</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Product Name</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Category</th>
@@ -258,10 +275,12 @@ try {
                                     $p_ret    = $p['retail_price'] ?? 0;
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
-                                <tr onclick="window.location.href='products.php?edit=<?= urlencode($p_id) ?>'" class="cursor-pointer transition hover:bg-indigo-50">
-                                    <td class="px-3 py-3 whitespace-nowrap">
-                                        <a href="products.php?edit=<?= urlencode($p_id) ?>" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-2 py-1 rounded shadow inline-block">Edit</a>
-                                    </td>
+                                <tr <?= !$is_viewer ? "onclick=\"window.location.href='products.php?edit=" . urlencode($p_id) . "'\" class=\"cursor-pointer transition hover:bg-indigo-50\"" : "class=\"transition hover:bg-gray-50\"" ?>>
+                                    <?php if (!$is_viewer): ?>
+                                        <td class="px-3 py-3 whitespace-nowrap">
+                                            <a href="products.php?edit=<?= urlencode($p_id) ?>" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-2 py-1 rounded shadow inline-block">Edit</a>
+                                        </td>
+                                    <?php endif; ?>
                                     <td class="px-3 py-3 font-mono text-indigo-600 font-semibold text-xs whitespace-nowrap"><?= htmlspecialchars($p_code ?: '-') ?></td>
                                     <td class="px-3 py-3 font-semibold text-gray-900 whitespace-nowrap"><?= htmlspecialchars($p_name) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_cat) ?></td>
@@ -288,7 +307,8 @@ try {
 </div>
 
 <script>
-// Barcode scanner listener
+<?php if (!$is_viewer): ?>
+// Barcode scanner listener (Only active for admin/tindera)
 document.getElementById('product_code_input').addEventListener('input', function() {
     let barcode = this.value.trim();
     if (barcode.length > 1) {
@@ -322,6 +342,7 @@ function calculateRemaining() {
 
 document.getElementById('stock_in_input').addEventListener('input', calculateRemaining);
 document.getElementById('stock_out_input').addEventListener('input', calculateRemaining);
+<?php endif; ?>
 </script>
 
 </body>
