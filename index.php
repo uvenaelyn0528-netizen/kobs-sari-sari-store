@@ -15,7 +15,7 @@
         <!-- Logo / Picture Representation -->
         <div class="mb-6 flex justify-center">
             <div class="w-32 h-32 bg-teal-400 rounded-full flex items-center justify-center shadow-lg border-4 border-white/30">
-                <!-- Maaari mong palitan ito ng <img src="logo.png" alt="KOBS COOP Logo" class="w-full h-full object-cover rounded-full"> kung mayroon kang imahe -->
+                <!-- Maaari mong palitan ito ng <img src="logo.png" alt="KOBS COOP Logo" class="w-full h-full object-cover rounded-full"> kung mayroon kang larawan -->
                 <span class="text-4xl font-black text-indigo-900 tracking-wider">KOBS</span>
             </div>
         </div>
@@ -25,7 +25,7 @@
 
         <!-- Navigation Buttons -->
         <div class="space-y-4">
-            <a href="dashboard.php" class="block w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
+            <a href="store.php" class="block w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
                 Store
             </a>
             
