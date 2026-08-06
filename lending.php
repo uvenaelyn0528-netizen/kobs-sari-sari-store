@@ -162,8 +162,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lending'])) {
     }
 }
 
-// Handle New Form Submission (Cash Borrow or Payment)
+// Handle New Form Submission (Cash Borrow or Payment) - Admin Only Protection Added Here
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
+    if (!$is_admin) {
+        echo "<script>alert('Access Denied: Only Admin can save transactions.'); window.location='lending.php';</script>";
+        exit;
+    }
+
     $tx_type       = $_POST['tx_type'] ?? 'Cash Borrow'; 
     $customer_name = trim($_POST['customer_name'] ?? '');
     $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
@@ -203,7 +208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
         } elseif ($tx_type === 'Payment') {
             $payment_amount = floatval($_POST['payment_amount'] ?? 0);
             $interest_amount = floatval($_POST['interest_amount'] ?? 0);
-            
+             
             if ($payment_amount <= 0 && $interest_amount <= 0) {
                 throw new Exception("Please enter a valid payment or interest amount.");
             }
@@ -285,7 +290,7 @@ try {
                 <span class="text-2xl mr-3">👀</span>
                 <div>
                     <p class="text-sm font-bold text-amber-800">Viewer Mode Notice</p>
-                    <p class="text-xs text-amber-700">Maaari mong tingnan ang mga rekord at magdagdag ng transaksyon, ngunit ang pag-edit at pag-delete ay para lamang sa Admin.</p>
+                    <p class="text-xs text-amber-700">Maaari mong tingnan ang mga rekord, ngunit ang pag-save, pag-edit, at pag-delete ng mga transaksyon ay para lamang sa Admin.</p>
                 </div>
             </div>
         </div>
@@ -295,7 +300,7 @@ try {
         <!-- Transaction Form -->
         <div class="bg-white p-6 rounded-xl shadow-md h-fit">
             <h2 class="text-lg font-bold text-gray-800 mb-4">New Money Transaction</h2>
-            
+             
             <form method="POST" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Transaction Type</label>
@@ -343,9 +348,15 @@ try {
                 </div>
 
                 <div>
-                    <button type="submit" name="save_lending" class="w-full bg-teal-600 text-white py-2 px-4 rounded-md hover:bg-teal-700 transition font-semibold shadow">
-                        Save Transaction
-                    </button>
+                    <?php if ($is_admin): ?>
+                        <button type="submit" name="save_lending" class="w-full bg-teal-600 text-white py-2 px-4 rounded-md hover:bg-teal-700 transition font-semibold shadow">
+                            Save Transaction
+                        </button>
+                    <?php else: ?>
+                        <button type="button" disabled class="w-full bg-gray-300 text-gray-500 py-2 px-4 rounded-md cursor-not-allowed font-semibold shadow">
+                            Save Transaction (Restricted)
+                        </button>
+                    <?php endif; ?>
                 </div>
             </form>
         </div>
@@ -377,7 +388,7 @@ try {
                                     $tx_date = new DateTime($l['date_sold']);
                                     $current_date = new DateTime();
                                     $interval = $tx_date->diff($current_date);
-                                    
+                                     
                                     $months = ($interval->y * 12) + $interval->m;
                                     if ($interval->d > 0) {
                                         $months += ($interval->d / 30);
@@ -410,7 +421,7 @@ try {
                                         <?php endif; ?>
                                     </td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($l['total_amount'], 2) ?></td>
-                                    
+                                     
                                     <td class="px-3 py-3 text-center">
                                         <?php if ($is_admin): ?>
                                             <!-- Admin Only Edit and Delete Buttons -->
