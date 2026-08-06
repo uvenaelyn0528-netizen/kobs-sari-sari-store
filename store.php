@@ -1,7 +1,16 @@
-<?>
 <?php
+session_start();
 require_once 'db.php';
 include 'header.php';
+
+$role = $_SESSION['role'] ?? 'admin'; 
+
+// Check if user has permission to view Store
+if ($role === 'gcash_incharge') {
+    echo '<div class="container mx-auto px-4 py-12 text-center"><div class="bg-red-100 text-red-700 p-4 rounded-lg max-w-md mx-auto font-semibold">Access Denied: You are only authorized to view the GCash section.</div></div>';
+    include 'footer.php';
+    exit;
+}
 ?>
 
 <div class="container mx-auto px-4 py-12">
@@ -10,6 +19,12 @@ include 'header.php';
         <a href="index.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
             &larr; Back to Dashboard
         </a>
+        
+        <?php if ($role === 'admin'): ?>
+            <span class="bg-purple-100 text-purple-700 text-xs font-bold px-3 py-1 rounded-full">Logged in as: Admin (Full Access)</span>
+        <?php elseif ($role === 'tindera'): ?>
+            <span class="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full">Logged in as: Tindera (Store Access Only)</span>
+        <?php endif; ?>
     </div>
 
     <div class="text-center mb-10">
