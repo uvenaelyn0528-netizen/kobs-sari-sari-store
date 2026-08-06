@@ -23,7 +23,7 @@ if (session_status() === PHP_SESSION_NONE) {
                     🛍️ <span class="text-teal-400">KOBS</span> COOP
                 </a>
                 <span class="text-indigo-400 text-sm hidden sm:inline">|</span>
-                <span class="text-teal-200 font-medium text-sm sm:text-base">KOBS Sari-Sari Store Credit list</span>
+                <span class="text-teal-200 font-medium text-sm sm:text-base">WELCOME TO KOBS COOP ONLINE SYSTEM</span>
             </div>
 
             <!-- User / Logout Info -->
