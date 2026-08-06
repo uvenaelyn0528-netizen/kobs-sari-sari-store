@@ -285,8 +285,8 @@ try {
     $sumCredit = $pdo->query("SELECT SUM(total_amount) as total_credit FROM stockouts WHERE remarks IN ('Credit', 'Balance')");
     $total_credit_res = $sumCredit->fetch(PDO::FETCH_ASSOC)['total_credit'] ?? 0;
 
-    // Limit fetched history to the last 100 transactions to speed up initial page load
-    $stmt = $pdo->query("SELECT * FROM stockouts ORDER BY id DESC LIMIT 100");
+    // Limit fetched history to the last 100 store transactions (excluding lending records)
+    $stmt = $pdo->query("SELECT * FROM stockouts WHERE remarks NOT ILIKE '%lending%' ORDER BY id DESC LIMIT 100");
     $stockouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
@@ -573,6 +573,3 @@ document.getElementById('searchStockout').addEventListener('keyup', function() {
     });
 });
 </script>
-
-</body>
-</html>
