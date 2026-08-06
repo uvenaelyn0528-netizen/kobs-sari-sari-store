@@ -1,5 +1,6 @@
 <?php
 require_once 'db.php';
+include 'header.php';
 
 // Kunin ang kabuuang total para sa mga kard sa taas
 try {
