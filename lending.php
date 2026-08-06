@@ -211,7 +211,7 @@ try {
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Interest Amount (Tubo)</label>
                         <input type="number" step="0.01" name="interest_amount" value="0.00" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                        <p class="text-xs text-gray-500 mt-1">Kalkulahin ang tubo mula sa simula ng utang hanggang ngayon batay sa natitirang balanse.</p>
+                        <p class="text-xs text-gray-500 mt-1">Kalkulahin ang tubo batay sa 10% kada buwan.</p>
                     </div>
                 </div>
 
@@ -243,12 +243,34 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Date</th>
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Customer Name</th>
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Description</th>
+                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Interest (10%/mo)</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Amount</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200 text-sm bg-white">
                         <?php if (!empty($lendings)): ?>
                             <?php foreach ($lendings as $l): ?>
+                                <?php 
+                                    // Compute months elapsed from transaction date to today (or use max(1, months))
+                                    $tx_date = new DateTime($l['date_sold']);
+                                    $current_date = new DateTime();
+                                    $interval = $tx_date->diff($current_date);
+                                    
+                                    // Total months = years * 12 + months (with a minimum of 1 month or fractional months if preferred)
+                                    $months = ($interval->y * 12) + $interval->m;
+                                    if ($interval->d > 0) {
+                                        $months += ($interval->d / 30); // fractional consideration or keep full months
+                                    }
+                                    if ($months < 1) {
+                                        $months = 1; // Minimum 1 month computation
+                                    }
+
+                                    // Interest = Borrowed Amount * 10% * number of months
+                                    $computed_interest = 0.00;
+                                    if ($l['remarks'] === 'Cash Lending') {
+                                        $computed_interest = floatval($l['total_amount']) * 0.10 * $months;
+                                    }
+                                ?>
                                 <tr class="hover:bg-gray-50 transition">
                                     <td class="px-3 py-3">
                                         <?php if ($l['remarks'] === 'Cash Lending'): ?>
@@ -260,12 +282,19 @@ try {
                                     <td class="px-3 py-3 text-gray-600"><?= htmlspecialchars($l['date_sold']) ?></td>
                                     <td class="px-3 py-3 text-gray-700 font-medium"><?= htmlspecialchars($l['customer_name']) ?></td>
                                     <td class="px-3 py-3 text-gray-900"><?= htmlspecialchars($l['product_name']) ?></td>
+                                    <td class="px-3 py-3 text-right font-semibold text-amber-600">
+                                        <?php if ($l['remarks'] === 'Cash Lending'): ?>
+                                            ₱<?= number_format($computed_interest, 2) ?> <span class="text-[10px] text-gray-400 block">(~<?= number_format($months, 1) ?> mo)</span>
+                                        <?php else: ?>
+                                            -
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($l['total_amount'], 2) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
+                                <td colspan="6" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -309,6 +338,7 @@ function handleCustomerSelectChange(selectElem) {
                 let opt = document.createElement('option');
                 opt.value = newName;
                 opt.textContent = newName;
+                selectEmp = selectElem;
                 selectElem.insertBefore(opt, selectElem.options[2]);
             }
             selectElem.value = newName;
