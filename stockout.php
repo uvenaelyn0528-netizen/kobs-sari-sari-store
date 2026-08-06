@@ -2,6 +2,14 @@
 require_once 'db.php';
 include 'header.php';
 
+// Ensure session is started and check if user role is allowed (admin or tindera)
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+$user_role = $_SESSION['role'] ?? '';
+$is_authorized = in_array(strtolower($user_role), ['admin', 'tindera']);
+
 $message = '';
 $message_type = '';
 
@@ -51,197 +59,207 @@ $master_customer_list = [
 ];
 sort($master_customer_list);
 
-// Handle Deletion
+// Handle Deletion (Restricted to Admin/Tindera)
 if (isset($_GET['delete_id'])) {
-    $del_id = intval($_GET['delete_id']);
-    try {
-        $st_stmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
-        $st_stmt->execute([$del_id]);
-        $tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
-
-        if ($tx) {
-            if ($tx['product_code'] !== '-' && !empty($tx['product_code'])) {
-                $revProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ?, \"Stock_out\" = \"Stock_out\" - ? WHERE product_code = ?");
-                $revProd->execute([$tx['qty_sold'], $tx['qty_sold'], $tx['product_code']]);
-            }
-
-            if (!empty($tx['customer_name'])) {
-                $c_name = $tx['customer_name'];
-                $chkC = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
-                $chkC->execute([$c_name]);
-                $c_data = $chkC->fetch(PDO::FETCH_ASSOC);
-
-                if ($c_data) {
-                    if ($tx['remarks'] === 'Credit') {
-                        $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
-                        $new_bal = $new_credit - floatval($c_data['total_payment']);
-                        $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                        $updC->execute([$new_credit, $new_bal, $c_name]);
-                    } elseif ($tx['remarks'] === 'Payment') {
-                        $new_pay = floatval($c_data['total_payment']) - floatval($tx['total_amount']);
-                        $new_bal = floatval($c_data['store_credit']) - $new_pay;
-                        $updC = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?");
-                        $updC->execute([$new_pay, $new_bal, $c_name]);
-                    } elseif ($tx['remarks'] === 'Balance') {
-                        $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
-                        $new_bal = $new_credit - floatval($c_data['total_payment']);
-                        $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                        $updC->execute([$new_credit, $new_bal, $c_name]);
-                    }
-                }
-            }
-
-            $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ?");
-            $delStmt->execute([$del_id]);
-
-            $message = "Transaction deleted and inventory/ledger successfully reverted.";
-            $message_type = "success";
-        }
-    } catch (Exception $e) {
-        $message = "Error deleting transaction: " . $e->getMessage();
+    if (!$is_authorized) {
+        $message = "Access Denied: You do not have permission to delete transactions.";
         $message_type = "error";
-    }
-}
-
-// Handle Form Submission (Add or Edit)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_stockout'])) {
-    $edit_id       = intval($_POST['edit_id'] ?? 0);
-    $product_code  = trim($_POST['product_code'] ?? '');
-    $qty_sold      = intval($_POST['qty_sold'] ?? 0);
-    $remarks       = $_POST['remarks'] ?? 'Cash';
-    $customer_name = trim($_POST['customer_name'] ?? '');
-    $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
-    $custom_amount = floatval($_POST['custom_amount'] ?? 0);
-
-    try {
-        if ($edit_id > 0) {
+    } else {
+        $del_id = intval($_GET['delete_id']);
+        try {
             $st_stmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
-            $st_stmt->execute([$edit_id]);
-            $old_tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
+            $st_stmt->execute([$del_id]);
+            $tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
 
-            if ($old_tx) {
-                if ($old_tx['product_code'] !== '-' && !empty($old_tx['product_code'])) {
+            if ($tx) {
+                if ($tx['product_code'] !== '-' && !empty($tx['product_code'])) {
                     $revProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ?, \"Stock_out\" = \"Stock_out\" - ? WHERE product_code = ?");
-                    $revProd->execute([$old_tx['qty_sold'], $old_tx['qty_sold'], $old_tx['product_code']]);
+                    $revProd->execute([$tx['qty_sold'], $tx['qty_sold'], $tx['product_code']]);
                 }
-                if (!empty($old_tx['customer_name'])) {
-                    $c_name = $old_tx['customer_name'];
+
+                if (!empty($tx['customer_name'])) {
+                    $c_name = $tx['customer_name'];
                     $chkC = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
                     $chkC->execute([$c_name]);
                     $c_data = $chkC->fetch(PDO::FETCH_ASSOC);
+
                     if ($c_data) {
-                        if ($old_tx['remarks'] === 'Credit') {
-                            $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
-                            $nb = $nc - floatval($c_data['total_payment']);
-                            $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
-                        } elseif ($old_tx['remarks'] === 'Payment') {
-                            $np = floatval($c_data['total_payment']) - floatval($old_tx['total_amount']);
-                            $nb = floatval($c_data['store_credit']) - $np;
-                            $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")->execute([$np, $nb, $c_name]);
-                        } elseif ($old_tx['remarks'] === 'Balance') {
-                            $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
-                            $nb = $nc - floatval($c_data['total_payment']);
-                            $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
+                        if ($tx['remarks'] === 'Credit') {
+                            $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
+                            $new_bal = $new_credit - floatval($c_data['total_payment']);
+                            $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
+                            $updC->execute([$new_credit, $new_bal, $c_name]);
+                        } elseif ($tx['remarks'] === 'Payment') {
+                            $new_pay = floatval($c_data['total_payment']) - floatval($tx['total_amount']);
+                            $new_bal = floatval($c_data['store_credit']) - $new_pay;
+                            $updC = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?");
+                            $updC->execute([$new_pay, $new_bal, $c_name]);
+                        } elseif ($tx['remarks'] === 'Balance') {
+                            $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
+                            $new_bal = $new_credit - floatval($c_data['total_payment']);
+                            $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
+                            $updC->execute([$new_credit, $new_bal, $c_name]);
                         }
                     }
                 }
-                $pdo->prepare("DELETE FROM stockouts WHERE id = ?")->execute([$edit_id]);
+
+                $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ?");
+                $delStmt->execute([$del_id]);
+
+                $message = "Transaction deleted and inventory/ledger successfully reverted.";
+                $message_type = "success";
             }
+        } catch (Exception $e) {
+            $message = "Error deleting transaction: " . $e->getMessage();
+            $message_type = "error";
         }
+    }
+}
 
-        if ($remarks === 'Payment' || $remarks === 'Balance') {
-            if (empty($customer_name)) {
-                throw new Exception("Please select a customer name for this transaction.");
-            }
+// Handle Form Submission (Add or Edit) (Restricted to Admin/Tindera)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_stockout'])) {
+    if (!$is_authorized) {
+        $message = "Access Denied: You do not have permission to process transactions.";
+        $message_type = "error";
+    } else {
+        $edit_id       = intval($_POST['edit_id'] ?? 0);
+        $product_code  = trim($_POST['product_code'] ?? '');
+        $qty_sold      = intval($_POST['qty_sold'] ?? 0);
+        $remarks       = $_POST['remarks'] ?? 'Cash';
+        $customer_name = trim($_POST['customer_name'] ?? '');
+        $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
+        $custom_amount = floatval($_POST['custom_amount'] ?? 0);
 
-            $total_amount = $custom_amount;
-            $product_name = ($remarks === 'Payment') ? 'Customer Account Payment' : 'Customer Opening Balance';
-            $category     = 'Credit Ledger';
+        try {
+            if ($edit_id > 0) {
+                $st_stmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
+                $st_stmt->execute([$edit_id]);
+                $old_tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
 
-            $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $insertStmt->execute(['-', $date_sold, 0, $remarks, $customer_name, $product_name, $category, $total_amount]);
-
-            $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
-            $checkCust->execute([$customer_name]);
-            $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
-
-            if ($remarks === 'Payment') {
-                if ($exists) {
-                    $new_payment = floatval($exists['total_payment']) + $total_amount;
-                    $new_balance = floatval($exists['store_credit']) - $new_payment;
-                    $upd = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
-                    $upd->execute([$new_payment, $new_balance, $customer_name]);
-                } else {
-                    $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, 0.00, ?, ?)");
-                    $upd->execute([$customer_name, $total_amount, -$total_amount]);
+                if ($old_tx) {
+                    if ($old_tx['product_code'] !== '-' && !empty($old_tx['product_code'])) {
+                        $revProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ?, \"Stock_out\" = \"Stock_out\" - ? WHERE product_code = ?");
+                        $revProd->execute([$old_tx['qty_sold'], $old_tx['qty_sold'], $old_tx['product_code']]);
+                    }
+                    if (!empty($old_tx['customer_name'])) {
+                        $c_name = $old_tx['customer_name'];
+                        $chkC = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
+                        $chkC->execute([$c_name]);
+                        $c_data = $chkC->fetch(PDO::FETCH_ASSOC);
+                        if ($c_data) {
+                            if ($old_tx['remarks'] === 'Credit') {
+                                $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
+                                $nb = $nc - floatval($c_data['total_payment']);
+                                $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
+                            } elseif ($old_tx['remarks'] === 'Payment') {
+                                $np = floatval($c_data['total_payment']) - floatval($old_tx['total_amount']);
+                                $nb = floatval($c_data['store_credit']) - $np;
+                                $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")->execute([$np, $nb, $c_name]);
+                            } elseif ($old_tx['remarks'] === 'Balance') {
+                                $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
+                                $nb = $nc - floatval($c_data['total_payment']);
+                                $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
+                            }
+                        }
+                    }
+                    $pdo->prepare("DELETE FROM stockouts WHERE id = ?")->execute([$edit_id]);
                 }
-            } else { // Balance
-                if ($exists) {
-                    $new_credit = floatval($exists['store_credit']) + $total_amount;
-                    $new_balance = $new_credit - floatval($exists['total_payment']);
-                    $upd = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
-                    $upd->execute([$new_credit, $new_balance, $customer_name]);
-                } else {
-                    $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
-                    $upd->execute([$customer_name, $total_amount, $total_amount]);
+            }
+
+            if ($remarks === 'Payment' || $remarks === 'Balance') {
+                if (empty($customer_name)) {
+                    throw new Exception("Please select a customer name for this transaction.");
                 }
-            }
 
-            $message = "Ledger transaction saved successfully!";
-            $message_type = "success";
+                $total_amount = $custom_amount;
+                $product_name = ($remarks === 'Payment') ? 'Customer Account Payment' : 'Customer Opening Balance';
+                $category     = 'Credit Ledger';
 
-        } else {
-            if (empty($product_code) || $qty_sold <= 0) {
-                throw new Exception("Please provide a valid product code and quantity.");
-            }
-
-            $stmt = $pdo->prepare("SELECT * FROM products WHERE product_code = ?");
-            $stmt->execute([$product_code]);
-            $product = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($product) {
-                $total_amount = $qty_sold * floatval($product['retail_price']);
-                
                 $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                $insertStmt->execute([
-                    $product_code, 
-                    $date_sold, 
-                    $qty_sold, 
-                    $remarks, 
-                    ($remarks === 'Credit' ? $customer_name : ''), 
-                    $product['product_name'], 
-                    $product['category'], 
-                    $total_amount
-                ]);
+                $insertStmt->execute(['-', $date_sold, 0, $remarks, $customer_name, $product_name, $category, $total_amount]);
 
-                $updateProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty - ?, \"Stock_out\" = \"Stock_out\" + ? WHERE product_code = ?");
-                $updateProd->execute([$qty_sold, $qty_sold, $product_code]);
+                $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
+                $checkCust->execute([$customer_name]);
+                $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
 
-                if ($remarks === 'Credit' && !empty($customer_name)) {
-                    $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
-                    $checkCust->execute([$customer_name]);
-                    $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
-
+                if ($remarks === 'Payment') {
+                    if ($exists) {
+                        $new_payment = floatval($exists['total_payment']) + $total_amount;
+                        $new_balance = floatval($exists['store_credit']) - $new_payment;
+                        $upd = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
+                        $upd->execute([$new_payment, $new_balance, $customer_name]);
+                    } else {
+                        $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, 0.00, ?, ?)");
+                        $upd->execute([$customer_name, $total_amount, -$total_amount]);
+                    }
+                } else { // Balance
                     if ($exists) {
                         $new_credit = floatval($exists['store_credit']) + $total_amount;
                         $new_balance = $new_credit - floatval($exists['total_payment']);
-                        $updateCredit = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                        $updateCredit->execute([$new_credit, $new_balance, $customer_name]);
+                        $upd = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
+                        $upd->execute([$new_credit, $new_balance, $customer_name]);
                     } else {
-                        $insertCredit = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
-                        $insertCredit->execute([$customer_name, $total_amount, $total_amount]);
+                        $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
+                        $upd->execute([$customer_name, $total_amount, $total_amount]);
                     }
                 }
 
-                $message = "Stockout transaction saved successfully!";
+                $message = "Ledger transaction saved successfully!";
                 $message_type = "success";
+
             } else {
-                throw new Exception("Product barcode not found in inventory.");
+                if (empty($product_code) || $qty_sold <= 0) {
+                    throw new Exception("Please provide a valid product code and quantity.");
+                }
+
+                $stmt = $pdo->prepare("SELECT * FROM products WHERE product_code = ?");
+                $stmt->execute([$product_code]);
+                $product = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($product) {
+                    $total_amount = $qty_sold * floatval($product['retail_price']);
+                    
+                    $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                    $insertStmt->execute([
+                        $product_code, 
+                        $date_sold, 
+                        $qty_sold, 
+                        $remarks, 
+                        ($remarks === 'Credit' ? $customer_name : ''), 
+                        $product['product_name'], 
+                        $product['category'], 
+                        $total_amount
+                    ]);
+
+                    $updateProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty - ?, \"Stock_out\" = \"Stock_out\" + ? WHERE product_code = ?");
+                    $updateProd->execute([$qty_sold, $qty_sold, $product_code]);
+
+                    if ($remarks === 'Credit' && !empty($customer_name)) {
+                        $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
+                        $checkCust->execute([$customer_name]);
+                        $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
+
+                        if ($exists) {
+                            $new_credit = floatval($exists['store_credit']) + $total_amount;
+                            $new_balance = $new_credit - floatval($exists['total_payment']);
+                            $updateCredit = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
+                            $updateCredit->execute([$new_credit, $new_balance, $customer_name]);
+                        } else {
+                            $insertCredit = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
+                            $insertCredit->execute([$customer_name, $total_amount, $total_amount]);
+                        }
+                    }
+
+                    $message = "Stockout transaction saved successfully!";
+                    $message_type = "success";
+                } else {
+                    throw new Exception("Product barcode not found in inventory.");
+                }
             }
+        } catch (Exception $e) {
+            $message = "Error: " . $e->getMessage();
+            $message_type = "error";
         }
-    } catch (Exception $e) {
-        $message = "Error: " . $e->getMessage();
-        $message_type = "error";
     }
 }
 
@@ -285,7 +303,6 @@ try {
     $sumCredit = $pdo->query("SELECT SUM(total_amount) as total_credit FROM stockouts WHERE remarks IN ('Credit', 'Balance')");
     $total_credit_res = $sumCredit->fetch(PDO::FETCH_ASSOC)['total_credit'] ?? 0;
 
-    // Limit fetched history to the last 100 store transactions (excluding lending records)
     $stmt = $pdo->query("SELECT * FROM stockouts WHERE remarks NOT ILIKE '%lending%' ORDER BY id DESC LIMIT 100");
     $stockouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -346,11 +363,18 @@ try {
                 <a href="stockout.php" id="cancelEditBtn" class="hidden text-xs text-red-600 font-semibold underline">Cancel Edit</a>
             </div>
             
+            <?php if (!$is_authorized): ?>
+                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
+                    <p class="font-bold">Viewer Mode</p>
+                    <p>Your account role (<?= htmlspecialchars($user_role ?: 'Guest') ?>) does not have permission to process transactions.</p>
+                </div>
+            <?php endif; ?>
+
             <form method="POST" class="space-y-4" id="transactionForm">
                 <input type="hidden" name="edit_id" id="edit_id" value="0">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Transaction Type</label>
-                    <select name="remarks" id="transactionType" onchange="handleTransactionChange(this.value)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <select name="remarks" id="transactionType" onchange="handleTransactionChange(this.value)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" <?= !$is_authorized ? 'disabled' : '' ?>>
                         <option value="Cash">Cash</option>
                         <option value="Credit">Credit</option>
                         <option value="Payment">Payment</option>
@@ -362,24 +386,24 @@ try {
                 <div id="productFields">
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-gray-700">Product Barcode / Code</label>
-                        <input type="text" id="scan_code" name="product_code" placeholder="Scan barcode or type code" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="text" id="scan_code" name="product_code" placeholder="Scan barcode or type code" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Quantity Sold</label>
-                        <input type="number" name="qty_sold" id="qtySoldInput" value="1" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        <input type="number" name="qty_sold" id="qtySoldInput" value="1" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
                     </div>
                 </div>
 
                 <!-- Custom Amount Field -->
                 <div id="amountFieldContainer" class="hidden">
                     <label class="block text-sm font-medium text-gray-700" id="amountLabel">Amount (₱)</label>
-                    <input type="number" step="0.01" name="custom_amount" id="customAmountInput" value="0.00" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    <input type="number" step="0.01" name="custom_amount" id="customAmountInput" value="0.00" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
                 </div>
 
                 <!-- Customer Field -->
                 <div id="customerFieldContainer" class="hidden">
                     <label class="block text-sm font-medium text-gray-700">Customer Name</label>
-                    <select name="customer_name" id="customerSelect" onchange="handleCustomerSelectChange(this)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <select name="customer_name" id="customerSelect" onchange="handleCustomerSelectChange(this)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" <?= !$is_authorized ? 'disabled' : '' ?>>
                         <option value="">-- Select Customer --</option>
                         <option value="ADD_NEW" class="font-bold text-indigo-600">+ Add New Customer...</option>
                         <?php foreach ($master_customer_list as $c): ?>
@@ -390,13 +414,15 @@ try {
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Date</label>
-                    <input type="date" name="date_sold" id="dateSoldInput" value="<?= date('Y-m-d') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    <input type="date" name="date_sold" id="dateSoldInput" value="<?= date('Y-m-d') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
                 </div>
-                <div>
-                    <button type="submit" name="save_stockout" id="submitBtn" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
-                        Process Transaction
-                    </button>
-                </div>
+                <?php if ($is_authorized): ?>
+                    <div>
+                        <button type="submit" name="save_stockout" id="submitBtn" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
+                            Process Transaction
+                        </button>
+                    </div>
+                <?php endif; ?>
             </form>
         </div>
 
@@ -443,8 +469,12 @@ try {
                                     <td class="px-3 py-3 font-medium text-gray-900"><?= htmlspecialchars($s['product_name']) ?></td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($s['total_amount'], 2) ?></td>
                                     <td class="px-3 py-3 text-center space-x-2">
-                                        <button onclick='editTransaction(<?= json_encode($s) ?>)' class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
-                                        <a href="stockout.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction? This will revert inventory and ledger balances.')" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
+                                        <?php if ($is_authorized): ?>
+                                            <button onclick='editTransaction(<?= json_encode($s) ?>)' class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
+                                            <a href="stockout.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction? This will revert inventory and ledger balances.')" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
+                                        <?php else: ?>
+                                            <span class="text-gray-400 text-xs italic">Restricted</span>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -558,18 +588,11 @@ function editTransaction(tx) {
     document.getElementById('dateSoldInput').value = tx.date_sold;
     document.getElementById('formTitle').textContent = "Edit Transaction (ID: " + tx.id + ")";
     document.getElementById('cancelEditBtn').classList.remove('hidden');
-    document.getElementById('submitBtn').textContent = "Update Transaction";
-    document.getElementById('submitBtn').classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
-    document.getElementById('submitBtn').classList.add('bg-amber-600', 'hover:bg-amber-700');
+    let submitBtn = document.getElementById('submitBtn');
+    if (submitBtn) {
+        submitBtn.textContent = "Update Transaction";
+        submitBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+        submitBtn.classList.add('bg-amber-600', 'hover:bg-amber-700');
+    }
 }
-
-// Search filter for history log table
-document.getElementById('searchStockout').addEventListener('keyup', function() {
-    let filter = this.value.toLowerCase();
-    let rows = document.querySelectorAll('#stockoutTable tbody tr');
-    rows.forEach(row => {
-        let text = row.textContent.toLowerCase();
-        row.style.display = text.includes(filter) ? '' : 'none';
-    });
-});
 </script>
