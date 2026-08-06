@@ -4,6 +4,7 @@ require_once 'db.php';
 include 'header.php';
 
 $role = strtolower(trim($_SESSION['role'] ?? 'admin')); 
+$is_admin = ($role === 'admin');
 ?>
 
 <div class="container mx-auto px-4 py-12">
@@ -12,8 +13,8 @@ $role = strtolower(trim($_SESSION['role'] ?? 'admin'));
         <p class="text-gray-600 mt-2">Welcome, <?= htmlspecialchars($_SESSION['username'] ?? 'User') ?>! (Role: <span class="capitalize font-semibold"><?= htmlspecialchars($role) ?></span>)</p>
     </div>
 
-    <!-- Main Navigation Grid - All buttons clickable for everyone -->
-    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 max-w-6xl mx-auto">
+    <!-- Main Navigation Grid - Adjusted for 6 items (responsive grid columns) -->
+    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
         
         <!-- Store Management -->
         <a href="store.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-indigo-600 transition transform hover:-translate-y-1 text-center group">
@@ -43,11 +44,18 @@ $role = strtolower(trim($_SESSION['role'] ?? 'admin'));
             <p class="text-xs text-gray-500 mt-1">Itala ang mga ATM withdrawals.</p>
         </a>
 
-        <!-- Admin Settings -->
+        <!-- Admin Settings / Users -->
         <a href="users.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-purple-600 transition transform hover:-translate-y-1 text-center group">
             <div class="text-4xl mb-3">⚙️</div>
             <h2 class="text-lg font-bold text-gray-800 group-hover:text-purple-600 transition">KOBS Admin Settings</h2>
             <p class="text-xs text-gray-500 mt-1">Pamahalaan ang mga user.</p>
+        </a>
+
+        <!-- Management Button (Restricted to Admin or available to all based on your needs) -->
+        <a href="management.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-teal-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">📊</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-teal-600 transition">KOBS Management</h2>
+            <p class="text-xs text-gray-500 mt-1">Reports at pangkalahatang ulat.</p>
         </a>
 
     </div>
