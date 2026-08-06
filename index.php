@@ -1,107 +1,53 @@
-<?php
-require_once 'db.php';
-include 'header.php';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KOBS COOP - Welcome</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-900 via-indigo-800 to-teal-900 min-h-screen flex flex-col items-center justify-center text-white px-4">
 
-// Fetch summary metrics safely
-try {
-    // Total Products
-    $stmt = $pdo->query("SELECT COUNT(*) FROM products");
-    $total_products = $stmt->fetchColumn();
-
-    // Total Items in Stock
-    $stmt = $pdo->query("SELECT SUM(stock_qty) FROM products");
-    $total_stock = $stmt->fetchColumn() ?: 0;
-
-    // Total Revenue & Profit from Sales (if sales table exists)
-    $total_revenue = 0;
-    $total_profit = 0;
-    try {
-        $salesStmt = $pdo->query("SELECT SUM(total_amount) as rev, SUM(total_profit) as prof FROM sales");
-        $salesData = $salesStmt->fetch(PDO::FETCH_ASSOC);
-        if ($salesData) {
-            $total_revenue = $salesData['rev'] ?? 0;
-            $total_profit = $salesData['prof'] ?? 0;
-        }
-    } catch (Exception $e) {
-        // Sales table might not exist yet
-    }
-
-    // Low Stock Alerts (< 5 items)
-    $lowStmt = $pdo->query("SELECT * FROM products WHERE stock_qty <= 5 ORDER BY stock_qty ASC");
-    $low_stock_products = $lowStmt->fetchAll(PDO::FETCH_ASSOC);
-
-} catch (PDOException $e) {
-    echo "<div class='bg-red-100 text-red-700 p-4 m-4 rounded'>Database Error: " . htmlspecialchars($e->getMessage()) . "</div>";
-    $total_products = 0;
-    $total_stock = 0;
-    $total_revenue = 0;
-    $total_profit = 0;
-    $low_stock_products = [];
-}
-?>
-
-<div class="container mx-auto px-4 py-8">
-    <!-- Top Summary Cards (Stay visible at top) -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-indigo-600">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Products</p>
-            <h3 class="text-3xl font-extrabold text-gray-800 mt-2"><?= number_format($total_products) ?></h3>
-        </div>
-        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-600">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Items in Stock</p>
-            <h3 class="text-3xl font-extrabold text-gray-800 mt-2"><?= number_format($total_stock) ?></h3>
-        </div>
-        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-emerald-600">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Revenue</p>
-            <h3 class="text-3xl font-extrabold text-emerald-700 mt-2">₱<?= number_format($total_revenue, 2) ?></h3>
-        </div>
-        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-amber-600">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Profit</p>
-            <h3 class="text-3xl font-extrabold text-amber-700 mt-2">₱<?= number_format($total_profit, 2) ?></h3>
-        </div>
-    </div>
-
-    <!-- Low Stock Alerts Section with Scrollable Container -->
-    <div class="bg-white p-6 rounded-xl shadow-md">
-        <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            Low Stock Alerts
-        </h2>
-
-        <?php if (!empty($low_stock_products)): ?>
-            <div class="max-h-[450px] overflow-y-auto overflow-x-auto relative">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50 sticky top-0 z-10">
-                        <tr>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product Code</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product Name</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remaining Qty</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 text-sm">
-                        <?php foreach ($low_stock_products as $item): ?>
-                            <tr>
-                                <td class="px-4 py-3 font-mono text-xs text-indigo-600"><?= htmlspecialchars($item['product_code'] ?? '-') ?></td>
-                                <td class="px-4 py-3 font-semibold text-gray-900"><?= htmlspecialchars($item['product_name']) ?></td>
-                                <td class="px-4 py-3 text-gray-600"><?= htmlspecialchars($item['category'] ?? 'Uncategorized') ?></td>
-                                <td class="px-4 py-3 font-bold text-red-600"><?= htmlspecialchars($item['stock_qty']) ?> <?= htmlspecialchars($item['um'] ?? '') ?></td>
-                                <td class="px-4 py-3">
-                                    <a href="products.php?edit=<?= urlencode($item['id']) ?>" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-1 rounded shadow">Restock</a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+    <!-- Container Card -->
+    <div class="bg-white/10 backdrop-blur-md p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-white/20">
+        
+        <!-- Logo / Picture Representation -->
+        <div class="mb-6 flex justify-center">
+            <div class="w-32 h-32 bg-teal-400 rounded-full flex items-center justify-center shadow-lg border-4 border-white/30">
+                <!-- Maaari mong palitan ito ng <img src="logo.png" alt="KOBS COOP Logo" class="w-full h-full object-cover rounded-full"> kung mayroon kang imahe -->
+                <span class="text-4xl font-black text-indigo-900 tracking-wider">KOBS</span>
             </div>
-        <?php else: ?>
-            <p class="text-sm text-gray-500 bg-gray-50 p-4 rounded-lg">All products have sufficient stock levels! 👍</p>
-        <?php endif; ?>
+        </div>
+
+        <h1 class="text-2xl font-bold mb-2 tracking-wide">KOBS COOP</h1>
+        <p class="text-teal-200 text-sm mb-8">Pumili ng opsyon sa ibaba upang magpatuloy:</p>
+
+        <!-- Navigation Buttons -->
+        <div class="space-y-4">
+            <a href="dashboard.php" class="block w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
+                Store
+            </a>
+            
+            <a href="lending.php" class="block w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
+                Lending
+            </a>
+            
+            <a href="gcash.php" class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
+                Gcash
+            </a>
+            
+            <a href="atm.php" class="block w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 text-center">
+                ATM Withdrawal
+            </a>
+        </div>
+
     </div>
-</div>
+
+    <!-- Footer Note -->
+    <footer class="mt-8 text-xs text-gray-300">
+        &copy; <?= date('Y') ?> KOBS COOP. All rights reserved.
+    </footer>
 
 </body>
 </html>
