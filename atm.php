@@ -1,4 +1,5 @@
 <?php
+session_start();
 require_once 'db.php';
 include 'header.php';
 
@@ -51,10 +52,16 @@ $master_customer_list = [
 ];
 sort($master_customer_list);
 
-// Handle Delete Action para sa Admin
+// Check if current user is admin
 $is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || (isset($_SESSION['username']) && strtolower($_SESSION['username']) === 'admin');
 
-if ($is_admin && isset($_GET['delete_id'])) {
+// Handle Delete Action para sa Admin
+if (isset($_GET['delete_id'])) {
+    if (!$is_admin) {
+        echo "<script>alert('Access Denied: Only Admin can delete ATM Withdrawal records.'); window.location='atm.php';</script>";
+        exit;
+    }
+
     $del_id = intval($_GET['delete_id']);
     try {
         $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ? AND remarks = 'ATM Withdrawal'");
@@ -80,10 +87,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_atm'])) {
         }
 
         $total_withdrawal = $atm_amount + $atm_fee;
-        // Gagamitin ang product_name para itabi ang halaga ng withdrawal, at ang total_amount para sa (Amount + Charge)
         $product_desc = "Withdrawal: ₱" . number_format($atm_amount, 2);
 
-        // I-save sa stockouts table (gamit ang remarks = 'ATM Withdrawal', product_code = fee para ma-store natin ang charge)
         $stmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, 1, 'ATM Withdrawal', ?, ?, 'ATM Services', ?)");
         $stmt->execute([$atm_fee, $date_sold, $customer_name, $product_desc, $total_withdrawal]);
 
@@ -91,6 +96,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_atm'])) {
         $message_type = "success";
     } catch (Exception $e) {
         $message = "Error: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle Edit Form Submission (Admin Only Protection)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_atm'])) {
+    if (!$is_admin) {
+        echo "<script>alert('Access Denied: Only Admin can update ATM Withdrawal records.'); window.location='atm.php';</script>";
+        exit;
+    }
+
+    $edit_id       = intval($_POST['edit_id']);
+    $customer_name = trim($_POST['customer_name'] ?? '');
+    $atm_amount    = floatval($_POST['atm_amount'] ?? 0);
+    $atm_fee       = floatval($_POST['atm_fee'] ?? 0);
+    $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
+
+    try {
+        if (empty($customer_name) || $atm_amount <= 0) {
+            throw new Exception("Mangyaring pumili ng customer at maglagay ng wastong halaga ng withdrawal.");
+        }
+
+        $total_withdrawal = $atm_amount + $atm_fee;
+        $product_desc = "Withdrawal: ₱" . number_format($atm_amount, 2);
+
+        $updt = $pdo->prepare("UPDATE stockouts SET product_code = ?, date_sold = ?, customer_name = ?, product_name = ?, total_amount = ? WHERE id = ? AND remarks = 'ATM Withdrawal'");
+        $updt->execute([$atm_fee, $date_sold, $customer_name, $product_desc, $total_withdrawal, $edit_id]);
+
+        $message = "ATM Withdrawal updated successfully!";
+        $message_type = "success";
+    } catch (Exception $e) {
+        $message = "Error updating: " . $e->getMessage();
         $message_type = "error";
     }
 }
@@ -109,6 +146,16 @@ try {
 ?>
 
 <div class="container mx-auto px-4 py-8 mb-12">
+    <!-- Back Button -->
+    <div class="mb-6">
+        <a href="javascript:history.back()" class="inline-flex items-center px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-md shadow-sm transition">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Back
+        </a>
+    </div>
+
     <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">🏧 ATM Withdrawal Management</h1>
@@ -125,15 +172,28 @@ try {
         </div>
     <?php endif; ?>
 
+    <!-- Viewer Notice for Non-Admin Users -->
+    <?php if (!$is_admin): ?>
+        <div class="mb-6 bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-lg shadow-sm">
+            <div class="flex items-center">
+                <span class="text-2xl mr-3">👀</span>
+                <div>
+                    <p class="text-sm font-bold text-amber-800">Viewer Mode Notice</p>
+                    <p class="text-xs text-amber-700">Maaari mong tingnan ang mga rekord at magdagdag ng transaksyon, ngunit ang pag-edit at pag-delete ay para lamang sa Admin.</p>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <!-- Form para sa Bagong ATM Transaction -->
-        <div class="bg-white p-6 rounded-xl shadow-md h-fit">
+        <div class="bg-white p-6 rounded-xl shadow-md h-fit border-t-4 border-emerald-500">
             <h2 class="text-lg font-bold text-gray-800 mb-4">New ATM Withdrawal</h2>
             
             <form method="POST" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Customer Name</label>
-                    <select name="customer_name" id="customerSelect" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <select name="customer_name" id="customerSelect" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white focus:ring-emerald-500 focus:border-emerald-500">
                         <option value="">-- Select Customer --</option>
                         <?php foreach ($master_customer_list as $c): ?>
                             <option value="<?= htmlspecialchars($c) ?>"><?= htmlspecialchars($c) ?></option>
@@ -156,7 +216,7 @@ try {
                     <input type="date" name="date_sold" value="<?= date('Y-m-d') ?>" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                 </div>
 
-                <div>
+                <div class="mt-6 pt-4 border-t border-gray-200">
                     <button type="submit" name="save_atm" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow">
                         Save ATM Transaction
                     </button>
@@ -167,46 +227,55 @@ try {
         <!-- History Table ng ATM Withdrawals -->
         <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-bold text-gray-800">ATM Transaction History</h2>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-800 mb-1">ATM Transaction History</h2>
+                    <p class="text-xs text-gray-500">Showing the latest recorded withdrawal activities.</p>
+                </div>
                 <input type="text" id="searchAtm" placeholder="Search records..." class="border rounded-md px-3 py-1 text-sm">
             </div>
 
             <div class="max-h-[500px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
                 <table class="min-w-full divide-y divide-gray-200" id="atmTable">
-                    <thead class="bg-emerald-100 sticky top-0 z-10">
+                    <thead class="bg-emerald-100 sticky top-0 z-10 shadow-sm">
                         <tr>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Date</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Customer Name</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Details</th>
-                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Charge</th>
-                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Total Amount</th>
-                            <?php if ($is_admin): ?>
-                                <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Action</th>
-                            <?php endif; ?>
+                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Date</th>
+                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Customer Name</th>
+                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Details</th>
+                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Charge</th>
+                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Total Amount</th>
+                            <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase whitespace-nowrap">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200 text-sm bg-white">
                         <?php if (!empty($atm_records)): ?>
                             <?php foreach ($atm_records as $row): 
                                 $charge = floatval($row['product_code']); // Nakatabi dito ang fee/charge
+                                // Extract the raw amount from product_desc for easy editing (e.g., "Withdrawal: ₱1,000.00" -> 1000.00)
+                                preg_match('/[0-9,]+(?:\.[0-9]+)?/', $row['product_name'], $matches);
+                                $raw_withdrawal_amount = isset($matches[0]) ? floatval(str_replace(',', '', $matches[0])) : 0;
                             ?>
-                                <tr class="hover:bg-gray-50 transition">
-                                    <td class="px-3 py-3 text-gray-600"><?= htmlspecialchars($row['date_sold']) ?></td>
-                                    <td class="px-3 py-3 text-gray-800 font-medium"><?= htmlspecialchars($row['customer_name']) ?></td>
-                                    <td class="px-3 py-3 text-gray-600 text-xs"><?= htmlspecialchars($row['product_name']) ?></td>
-                                    <td class="px-3 py-3 text-right text-gray-700 font-medium">₱<?= number_format($charge, 2) ?></td>
-                                    <td class="px-3 py-3 text-right font-bold text-emerald-700">₱<?= number_format($row['total_amount'], 2) ?></td>
+                                <tr class="hover:bg-emerald-50 transition">
+                                    <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($row['date_sold']) ?></td>
+                                    <td class="px-3 py-3 text-gray-800 font-medium whitespace-nowrap"><?= htmlspecialchars($row['customer_name']) ?></td>
+                                    <td class="px-3 py-3 text-gray-600 text-xs whitespace-nowrap"><?= htmlspecialchars($row['product_name']) ?></td>
+                                    <td class="px-3 py-3 text-right text-gray-700 font-medium whitespace-nowrap">₱<?= number_format($charge, 2) ?></td>
+                                    <td class="px-3 py-3 text-right font-bold text-emerald-700 whitespace-nowrap">₱<?= number_format($row['total_amount'], 2) ?></td>
                                     
-                                    <?php if ($is_admin): ?>
-                                        <td class="px-3 py-3 text-center">
+                                    <td class="px-3 py-3 text-center whitespace-nowrap">
+                                        <?php if ($is_admin): ?>
+                                            <!-- Admin Only Edit and Delete Buttons -->
+                                            <button onclick="openEditModal(<?= $row['id'] ?>, '<?= htmlspecialchars($row['customer_name'], ENT_QUOTES) ?>', <?= $raw_withdrawal_amount ?>, <?= $charge ?>, '<?= htmlspecialchars($row['date_sold'], ENT_QUOTES) ?>')" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded mr-1">Edit</button>
                                             <a href="atm.php?delete_id=<?= $row['id'] ?>" onclick="return confirm('Sigurado ka bang gusto mong tanggalin ang rekord na ito?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
-                                        </td>
-                                    <?php endif; ?>
+                                        <?php else: ?>
+                                            <!-- Non-Admin / Viewers Badge -->
+                                            <span class="text-gray-400 italic text-xs bg-gray-100 px-2 py-1 rounded">Restricted</span>
+                                        <?php endif; ?>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="<?= $is_admin ? 6 : 5 ?>" class="px-4 py-4 text-center text-gray-500">Walang nakitang rekord ng ATM.</td>
+                                <td colspan="6" class="px-4 py-4 text-center text-gray-500">Walang nakitang rekord ng ATM.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -216,7 +285,55 @@ try {
     </div>
 </div>
 
+<!-- Edit Modal -->
+<div id="editModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">Edit ATM Withdrawal</h2>
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="edit_id" id="edit_id">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Customer Name</label>
+                <select name="customer_name" id="edit_customer_name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                    <option value="">-- Select Customer --</option>
+                    <?php foreach ($master_customer_list as $c): ?>
+                        <option value="<?= htmlspecialchars($c) ?>"><?= htmlspecialchars($c) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Withdrawal Amount (₱)</label>
+                <input type="number" step="0.01" name="atm_amount" id="edit_atm_amount" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Fee / Charge (₱)</label>
+                <input type="number" step="0.01" name="atm_fee" id="edit_atm_fee" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" name="date_sold" id="edit_date_sold" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" onclick="closeEditModal()" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 font-semibold text-sm">Cancel</button>
+                <button type="submit" name="update_atm" class="bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 font-semibold text-sm">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
+function openEditModal(id, customerName, atmAmount, atmFee, dateSold) {
+    document.getElementById('edit_id').value = id;
+    document.getElementById('edit_customer_name').value = customerName;
+    document.getElementById('edit_atm_amount').value = atmAmount;
+    document.getElementById('edit_atm_fee').value = atmFee;
+    document.getElementById('edit_date_sold').value = dateSold;
+    document.getElementById('editModal').classList.remove('hidden');
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').classList.add('hidden');
+}
+
 // Search filter para sa table
 document.getElementById('searchAtm').addEventListener('keyup', function() {
     let filter = this.value.toLowerCase();
@@ -227,3 +344,6 @@ document.getElementById('searchAtm').addEventListener('keyup', function() {
     });
 });
 </script>
+
+</body>
+</html>
