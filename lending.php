@@ -1,11 +1,12 @@
 <?php
+session_start();
 require_once 'db.php';
 include 'header.php';
 
 $message = '';
 $message_type = '';
 
-// Check if current user is admin (assuming session stores role or username, adjust as per your auth system)
+// Check if current user is admin
 $is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || (isset($_SESSION['username']) && strtolower($_SESSION['username']) === 'admin');
 
 // Complete master list of customers
@@ -54,11 +55,15 @@ $master_customer_list = [
 ];
 sort($master_customer_list);
 
-// Handle Delete Action
+// Handle Delete Action (Admin Only Protection)
 if (isset($_GET['delete_id'])) {
+    if (!$is_admin) {
+        echo "<script>alert('Access Denied: Only Admin can delete transactions.'); window.location='lending.php';</script>";
+        exit;
+    }
+
     $del_id = intval($_GET['delete_id']);
     try {
-        // Fetch transaction details before deleting to reverse credits effect if needed
         $tStmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ? AND remarks IN ('Cash Lending', 'Cash Lending Payment')");
         $tStmt->execute([$del_id]);
         $tx_to_del = $tStmt->fetch(PDO::FETCH_ASSOC);
@@ -68,7 +73,6 @@ if (isset($_GET['delete_id'])) {
             $t_amount = floatval($tx_to_del['total_amount']);
             $t_remarks = $tx_to_del['remarks'];
 
-            // Reverse credit balance
             $cCheck = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
             $cCheck->execute([$c_name]);
             $cData = $cCheck->fetch(PDO::FETCH_ASSOC);
@@ -87,7 +91,6 @@ if (isset($_GET['delete_id'])) {
                 }
             }
 
-            // Delete record
             $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ?");
             $delStmt->execute([$del_id]);
 
@@ -100,8 +103,13 @@ if (isset($_GET['delete_id'])) {
     }
 }
 
-// Handle Edit Form Submission
+// Handle Edit Form Submission (Admin Only Protection)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lending'])) {
+    if (!$is_admin) {
+        echo "<script>alert('Access Denied: Only Admin can update transactions.'); window.location='lending.php';</script>";
+        exit;
+    }
+
     $edit_id       = intval($_POST['edit_id']);
     $customer_name = trim($_POST['customer_name'] ?? '');
     $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
@@ -112,7 +120,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lending'])) {
             throw new Exception("Please provide valid customer and amount.");
         }
 
-        // Fetch old record to calculate difference and adjust credits ledger properly
         $oldStmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
         $oldStmt->execute([$edit_id]);
         $oldRecord = $oldStmt->fetch(PDO::FETCH_ASSOC);
@@ -123,11 +130,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lending'])) {
             $remarks = $oldRecord['remarks'];
             $diff = $total_amount - $old_amount;
 
-            // Update stockouts record
             $updt = $pdo->prepare("UPDATE stockouts SET customer_name = ?, date_sold = ?, total_amount = ? WHERE id = ?");
             $updt->execute([$customer_name, $date_sold, $total_amount, $edit_id]);
 
-            // Adjust credits if customer changed or amount changed
             if ($old_customer === $customer_name) {
                 $cCheck = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
                 $cCheck->execute([$customer_name]);
@@ -245,6 +250,13 @@ try {
 ?>
 
 <div class="container mx-auto px-4 py-8 mb-12">
+    <!-- Back to Dashboard -->
+    <div class="mb-4">
+        <a href="index.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
+            &larr; Back to Dashboard
+        </a>
+    </div>
+
     <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">💵 Cash Lending & Interest Management</h1>
@@ -263,6 +275,19 @@ try {
     <?php if (!empty($message)): ?>
         <div class="mb-4 p-3 rounded <?= $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>">
             <?= htmlspecialchars($message) ?>
+        </div>
+    <?php endif; ?>
+
+    <!-- Viewer Notice for Non-Admin Users -->
+    <?php if (!$is_admin): ?>
+        <div class="mb-6 bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-lg shadow-sm">
+            <div class="flex items-center">
+                <span class="text-2xl mr-3">👀</span>
+                <div>
+                    <p class="text-sm font-bold text-amber-800">Viewer Mode Notice</p>
+                    <p class="text-xs text-amber-700">Maaari mong tingnan ang mga rekord at magdagdag ng transaksyon, ngunit ang pag-edit at pag-delete ay para lamang sa Admin.</p>
+                </div>
+            </div>
         </div>
     <?php endif; ?>
 
@@ -342,9 +367,7 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Description</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Interest (10%/mo)</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Amount</th>
-                            <?php if ($is_admin): ?>
-                                <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Actions</th>
-                            <?php endif; ?>
+                            <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200 text-sm bg-white">
@@ -388,17 +411,21 @@ try {
                                     </td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($l['total_amount'], 2) ?></td>
                                     
-                                    <?php if ($is_admin): ?>
-                                        <td class="px-3 py-3 text-center space-x-2">
-                                            <button onclick="openEditModal(<?= $l['id'] ?>, '<?= htmlspecialchars($l['customer_name'], ENT_QUOTES) ?>', '<?= $l['date_sold'] ?>', <?= $l['total_amount'] ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
+                                    <td class="px-3 py-3 text-center">
+                                        <?php if ($is_admin): ?>
+                                            <!-- Admin Only Edit and Delete Buttons -->
+                                            <button onclick="openEditModal(<?= $l['id'] ?>, '<?= htmlspecialchars($l['customer_name'], ENT_QUOTES) ?>', '<?= $l['date_sold'] ?>', <?= $l['total_amount'] ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded mr-1">Edit</button>
                                             <a href="lending.php?delete_id=<?= $l['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
-                                        </td>
-                                    <?php endif; ?>
+                                        <?php else: ?>
+                                            <!-- Non-Admin / Viewers Badge -->
+                                            <span class="text-gray-400 italic text-xs bg-gray-100 px-2 py-1 rounded">Restricted</span>
+                                        <?php endif; ?>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="<?= $is_admin ? 7 : 6 ?>" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
+                                <td colspan="7" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
