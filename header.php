@@ -8,7 +8,7 @@ if (session_status() === PHP_SESSION_NONE) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KOBS COOP - Sari-Sari Inventory & POS</title>
+    <title>KOBS COOP - Credit List</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -17,26 +17,13 @@ if (session_status() === PHP_SESSION_NONE) {
     <!-- Navbar -->
     <nav class="bg-indigo-900 text-white shadow-md">
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- Brand Logo / Name -->
-            <div class="flex items-center space-x-2">
+            <!-- Brand Logo & New Header Title -->
+            <div class="flex items-center space-x-3">
                 <a href="index.php" class="text-xl font-bold tracking-wide flex items-center gap-2">
                     🛍️ <span class="text-teal-400">KOBS</span> COOP
                 </a>
-            </div>
-
-            <!-- Navigation Links -->
-            <div class="flex items-center space-x-6">
-                <!-- Store Link (Redirects to store.php) -->
-                <a href="store.php" class="font-medium hover:text-teal-300 transition">Store</a>
-
-                <!-- Lending Link -->
-                <a href="lending.php" class="font-medium hover:text-teal-300 transition">Lending</a>
-
-                <!-- Gcash Link -->
-                <a href="gcash.php" class="font-medium hover:text-teal-300 transition">Gcash</a>
-
-                <!-- ATM Withdrawal Link -->
-                <a href="atm.php" class="font-medium hover:text-teal-300 transition">ATM Withdrawal</a>
+                <span class="text-indigo-400 text-sm hidden sm:inline">|</span>
+                <span class="text-teal-200 font-medium text-sm sm:text-base">KOBS Sari-Sari Store Credit list</span>
             </div>
 
             <!-- User / Logout Info -->
