@@ -147,14 +147,19 @@ try {
 }
 ?>
 
-<div class="container mx-auto px-4 py-8">
+<div class="container mx-auto px-4 py-8 mb-12">
     <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">💵 Cash Lending & Interest Management</h1>
             <p class="text-sm text-gray-600">Record cash borrowings, compute duration interest, and track payments.</p>
         </div>
-        <div class="bg-teal-100 text-teal-800 px-4 py-2 rounded-lg font-bold shadow-sm">
-            Total Active Cash Lending: ₱<?= number_format($total_lending_res, 2) ?>
+        <div class="flex items-center gap-3">
+            <a href="lending_summary.php" class="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm hover:bg-indigo-700 transition flex items-center gap-2 text-sm">
+                📊 View Summary Report
+            </a>
+            <div class="bg-teal-100 text-teal-800 px-4 py-2 rounded-lg font-bold shadow-sm">
+                Total Active Cash Lending: ₱<?= number_format($total_lending_res, 2) ?>
+            </div>
         </div>
     </div>
 
@@ -323,5 +328,3 @@ document.getElementById('searchLending').addEventListener('keyup', function() {
     });
 });
 </script>
-
-<?php include 'footer.php'; ?>
