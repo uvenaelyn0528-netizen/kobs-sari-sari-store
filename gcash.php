@@ -1,114 +1,165 @@
 <?php
-session_start();
 require_once 'db.php';
 include 'header.php';
 
-// Get current user role
-$role = strtolower(trim($_SESSION['role'] ?? 'admin'));
-$is_admin = ($role === 'admin');
-$is_gcash_user = ($role === 'gcash_incharge');
+$message = '';
+$message_type = '';
 
-// Restrict processing strictly to Admin and GCash In-Charge
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_admin && !$is_gcash_user) {
-    echo "<script>alert('Access Denied: You are in viewer mode only and cannot process transactions.'); window.location='gcash.php';</script>";
-    exit;
+// Handle GCash Transaction Submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_gcash'])) {
+    $ref_number   = trim($_POST['ref_number'] ?? '');
+    $sender_name  = trim($_POST['sender_name'] ?? '');
+    $mobile_num   = trim($_POST['mobile_num'] ?? '');
+    $amount       = floatval($_POST['amount'] ?? 0);
+    $tx_type      = $_POST['tx_type'] ?? 'Cash In'; // Cash In or Cash Out
+    $fee          = floatval($_POST['fee'] ?? 0);
+
+    if (empty($ref_number) || empty($sender_name) || $amount <= 0) {
+        $message = "Please fill in all required fields correctly.";
+        $message_type = "error";
+    } else {
+        try {
+            // Optional: Check if reference number already exists to avoid double entries
+            $checkStmt = $pdo->prepare("SELECT id FROM gcash_transactions WHERE ref_number = ?");
+            $checkStmt->execute([$ref_number]);
+            if ($checkStmt->rowCount() > 0) {
+                $message = "Error: Reference number already exists!";
+                $message_type = "error";
+            } else {
+                $stmt = $pdo->prepare('INSERT INTO gcash_transactions (ref_number, sender_name, mobile_num, amount, tx_type, fee, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())');
+                $stmt->execute([$ref_number, $sender_name, $mobile_num, $amount, $tx_type, $fee]);
+                $message = "GCash transaction recorded successfully!";
+                $message_type = "success";
+            }
+        } catch (PDOException $e) {
+            $message = "Database Error: " . $e->getMessage();
+            $message_type = "error";
+        }
+    }
+}
+
+// Fetch Recent GCash Transactions
+try {
+    $stmt = $pdo->query('SELECT * FROM gcash_transactions ORDER BY created_at DESC LIMIT 50');
+    $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $transactions = [];
 }
 ?>
 
 <div class="container mx-auto px-4 py-8">
-    <!-- Top Bar -->
-    <div class="flex justify-between items-center max-w-5xl mx-auto mb-6">
-        <a href="index.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
-            &larr; Back to Dashboard
+    <!-- Back Button -->
+    <div class="mb-6">
+        <a href="javascript:history.back()" class="inline-flex items-center px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-md shadow-sm transition">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Back
         </a>
-        <span class="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full uppercase">Role: <?= htmlspecialchars($role) ?></span>
     </div>
 
-    <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold text-gray-800">📱 GCash Management</h1>
-        <p class="text-gray-600 mt-1">Pamahalaan at tingnan ang mga transaksyon at balanse ng GCash.</p>
-    </div>
+    <h1 class="text-2xl font-bold text-blue-600 mb-6 flex items-center gap-2">
+        <span>📱 GCash Transaction Manager</span>
+    </h1>
 
-    <!-- Notice for Tindera / Viewers -->
-    <?php if (!$is_admin && !$is_gcash_user): ?>
-        <div class="max-w-5xl mx-auto mb-6 bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-lg shadow-sm">
-            <div class="flex items-center">
-                <span class="text-2xl mr-3">👀</span>
-                <div>
-                    <p class="text-sm font-bold text-amber-800">Viewer Mode Active</p>
-                    <p class="text-xs text-amber-700">Maaari mong tingnan ang mga transaksyon sa ibaba, ngunit ang paggawa ng transaksyon ay nakalaan lamang para sa GCash In-Charge at Admin.</p>
-                </div>
-            </div>
+    <?php if (!empty($message)): ?>
+        <div class="mb-4 p-3 rounded <?= $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>">
+            <?= htmlspecialchars($message) ?>
         </div>
     <?php endif; ?>
 
-    <!-- Transaction Form Section (Allowed for Admin and GCash In-Charge) -->
-    <?php if ($is_admin || $is_gcash_user): ?>
-        <div class="max-w-5xl mx-auto bg-white p-6 rounded-xl shadow-md mb-8 border-t-4 border-blue-600">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">New GCash Transaction</h2>
-            <form action="process_gcash.php" method="POST" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- GCash Form -->
+        <div class="bg-white p-6 rounded-xl shadow-md h-fit border-t-4 border-blue-500">
+            <h2 class="text-lg font-bold text-gray-800 mb-4">New GCash Entry</h2>
+
+            <form method="POST" class="space-y-4">
                 <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Transaction Type</label>
-                    <select name="type" required class="w-full border rounded-lg p-2 text-sm focus:ring focus:ring-blue-300">
+                    <label class="block text-sm font-medium text-gray-700">Transaction Type</label>
+                    <select name="tx_type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white focus:ring-blue-500 focus:border-blue-500">
                         <option value="Cash In">Cash In</option>
                         <option value="Cash Out">Cash Out</option>
                     </select>
                 </div>
+
                 <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Amount (₱)</label>
-                    <input type="number" step="0.01" name="amount" required placeholder="0.00" class="w-full border rounded-lg p-2 text-sm focus:ring focus:ring-blue-300">
+                    <label class="block text-sm font-medium text-gray-700">Reference Number</label>
+                    <input type="text" name="ref_number" required placeholder="Enter 13-digit ref number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
                 </div>
-                <div class="flex items-end">
-                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg text-sm transition shadow-sm">
-                        Process Transaction
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Customer / Sender Name</label>
+                    <input type="text" name="sender_name" required placeholder="Full Name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Mobile Number</label>
+                    <input type="text" name="mobile_num" placeholder="09XXXXXXXXX" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Amount (₱)</label>
+                        <input type="number" step="0.01" name="amount" required placeholder="0.00" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Fee (₱)</label>
+                        <input type="number" step="0.01" name="fee" value="0.00" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                </div>
+
+                <div class="mt-6 pt-4 border-t border-gray-200">
+                    <button type="submit" name="process_gcash" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition font-semibold shadow">
+                        Save Transaction
                     </button>
                 </div>
             </form>
         </div>
-    <?php endif; ?>
 
-    <!-- Records / History Table -->
-    <div class="max-w-5xl mx-auto bg-white rounded-xl shadow-md overflow-hidden">
-        <div class="px-6 py-4 bg-gray-50 border-b flex justify-between items-center">
-            <h3 class="font-bold text-gray-700">GCash Transaction History</h3>
-            <span class="text-xs text-gray-500">Edit & Delete restricted to Admin</span>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-100">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Date</th>
-                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Type</th>
-                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Amount</th>
-                        <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Processed By</th>
-                        <!-- Actions column is shown to everyone, but buttons inside are role-checked -->
-                        <th class="px-6 py-3 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200 text-sm text-gray-700">
-                    <!-- Example Row / Loop -->
-                    <tr>
-                        <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">2026-08-06 17:15</td>
-                        <td class="px-6 py-4 whitespace-nowrap font-semibold text-green-600">Cash In</td>
-                        <td class="px-6 py-4 whitespace-nowrap font-bold">₱500.00</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-gray-500">gcash_user</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <?php if ($is_admin): ?>
-                                <!-- Only Admin can see/use Edit and Delete -->
-                                <a href="edit_gcash.php?id=1" class="text-indigo-600 hover:text-indigo-900 mr-2">Edit</a>
-                                <a href="delete_gcash.php?id=1" class="text-red-600 hover:text-red-900" onclick="return confirm('Delete this transaction?');">Delete</a>
-                            <?php else: ?>
-                                <!-- GCash User and Tindera see a restricted badge instead of action buttons -->
-                                <span class="text-gray-400 italic text-xs bg-gray-100 px-2 py-1 rounded">No Permission</span>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+        <!-- Transactions History Table -->
+        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
+            <h2 class="text-lg font-bold text-gray-800 mb-1">Recent GCash Logs</h2>
+            <p class="text-xs text-gray-500 mb-4">Showing the latest recorded cash-in and cash-out activities.</p>
+            
+            <div class="max-h-[600px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Ref Number</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Name</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Mobile</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Amount</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Fee</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Date/Time</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 text-sm bg-white">
+                        <?php if (!empty($transactions)): ?>
+                            <?php foreach ($transactions as $tx): ?>
+                                <tr class="hover:bg-blue-50 transition">
+                                    <td class="px-3 py-3 whitespace-nowrap font-bold <?= $tx['tx_type'] === 'Cash In' ? 'text-green-600' : 'text-orange-600' ?>">
+                                        <?= htmlspecialchars($tx['tx_type']) ?>
+                                    </td>
+                                    <td class="px-3 py-3 font-mono text-xs whitespace-nowrap"><?= htmlspecialchars($tx['ref_number']) ?></td>
+                                    <td class="px-3 py-3 font-semibold text-gray-900 whitespace-nowrap"><?= htmlspecialchars($tx['sender_name']) ?></td>
+                                    <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($tx['mobile_num']) ?></td>
+                                    <td class="px-3 py-3 font-bold text-gray-800 whitespace-nowrap">₱<?= number_format($tx['amount'], 2) ?></td>
+                                    <td class="px-3 py-3 text-gray-600 whitespace-nowrap">₱<?= number_format($tx['fee'], 2) ?></td>
+                                    <td class="px-3 py-3 text-xs text-gray-500 whitespace-nowrap"><?= htmlspecialchars($tx['created_at']) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="7" class="px-4 py-4 text-center text-gray-500">No GCash transactions found.</td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
 
-<?php 
-// include 'footer.php'; 
-?>
+</body>
+</html>
