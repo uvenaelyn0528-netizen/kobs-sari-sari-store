@@ -5,6 +5,9 @@ include 'header.php';
 $message = '';
 $message_type = '';
 
+// Check if current user is admin (assuming session stores role or username, adjust as per your auth system)
+$is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || (isset($_SESSION['username']) && strtolower($_SESSION['username']) === 'admin');
+
 // Complete master list of customers
 $master_customer_list = [
     "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
@@ -51,7 +54,110 @@ $master_customer_list = [
 ];
 sort($master_customer_list);
 
-// Handle Form Submission (Cash Borrow or Payment)
+// Handle Delete Action
+if (isset($_GET['delete_id'])) {
+    $del_id = intval($_GET['delete_id']);
+    try {
+        // Fetch transaction details before deleting to reverse credits effect if needed
+        $tStmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ? AND remarks IN ('Cash Lending', 'Cash Lending Payment')");
+        $tStmt->execute([$del_id]);
+        $tx_to_del = $tStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($tx_to_del) {
+            $c_name = $tx_to_del['customer_name'];
+            $t_amount = floatval($tx_to_del['total_amount']);
+            $t_remarks = $tx_to_del['remarks'];
+
+            // Reverse credit balance
+            $cCheck = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
+            $cCheck->execute([$c_name]);
+            $cData = $cCheck->fetch(PDO::FETCH_ASSOC);
+
+            if ($cData) {
+                if ($t_remarks === 'Cash Lending') {
+                    $new_credit = max(0, floatval($cData['store_credit']) - $t_amount);
+                    $new_balance = $new_credit - floatval($cData['total_payment']);
+                    $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")
+                        ->execute([$new_credit, $new_balance, $c_name]);
+                } else {
+                    $new_payment = max(0, floatval($cData['total_payment']) - $t_amount);
+                    $new_balance = floatval($cData['store_credit']) - $new_payment;
+                    $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")
+                        ->execute([$new_payment, $new_balance, $c_name]);
+                }
+            }
+
+            // Delete record
+            $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ?");
+            $delStmt->execute([$del_id]);
+
+            $message = "Transaction successfully deleted and balances updated!";
+            $message_type = "success";
+        }
+    } catch (Exception $e) {
+        $message = "Error deleting transaction: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle Edit Form Submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_lending'])) {
+    $edit_id       = intval($_POST['edit_id']);
+    $customer_name = trim($_POST['customer_name'] ?? '');
+    $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
+    $total_amount  = floatval($_POST['total_amount'] ?? 0);
+
+    try {
+        if (empty($customer_name) || $total_amount <= 0) {
+            throw new Exception("Please provide valid customer and amount.");
+        }
+
+        // Fetch old record to calculate difference and adjust credits ledger properly
+        $oldStmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
+        $oldStmt->execute([$edit_id]);
+        $oldRecord = $oldStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($oldRecord) {
+            $old_amount = floatval($oldRecord['total_amount']);
+            $old_customer = $oldRecord['customer_name'];
+            $remarks = $oldRecord['remarks'];
+            $diff = $total_amount - $old_amount;
+
+            // Update stockouts record
+            $updt = $pdo->prepare("UPDATE stockouts SET customer_name = ?, date_sold = ?, total_amount = ? WHERE id = ?");
+            $updt->execute([$customer_name, $date_sold, $total_amount, $edit_id]);
+
+            // Adjust credits if customer changed or amount changed
+            if ($old_customer === $customer_name) {
+                $cCheck = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
+                $cCheck->execute([$customer_name]);
+                $cData = $cCheck->fetch(PDO::FETCH_ASSOC);
+
+                if ($cData) {
+                    if ($remarks === 'Cash Lending') {
+                        $new_credit = floatval($cData['store_credit']) + $diff;
+                        $new_balance = $new_credit - floatval($cData['total_payment']);
+                        $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")
+                            ->execute([$new_credit, $new_balance, $customer_name]);
+                    } else {
+                        $new_payment = floatval($cData['total_payment']) + $diff;
+                        $new_balance = floatval($cData['store_credit']) - $new_payment;
+                        $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")
+                            ->execute([$new_payment, $new_balance, $customer_name]);
+                    }
+                }
+            }
+
+            $message = "Transaction updated successfully!";
+            $message_type = "success";
+        }
+    } catch (Exception $e) {
+        $message = "Error updating: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle New Form Submission (Cash Borrow or Payment)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
     $tx_type       = $_POST['tx_type'] ?? 'Cash Borrow'; 
     $customer_name = trim($_POST['customer_name'] ?? '');
@@ -69,15 +175,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
                 throw new Exception("Please enter a valid cash borrow amount.");
             }
 
-            // Insert into stockouts with remarks = 'Cash Lending'
             $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES ('-', ?, 0, 'Cash Lending', ?, 'Cash Loan', 'Money Lending', ?)");
-            $insertStmt->execute([
-                $date_sold, 
-                $customer_name, 
-                $borrow_amount
-            ]);
+            $insertStmt->execute([$date_sold, $customer_name, $borrow_amount]);
 
-            // Update credits ledger
             $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
             $checkCust->execute([$customer_name]);
             $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
@@ -85,11 +185,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
             if ($exists) {
                 $new_credit = floatval($exists['store_credit']) + $borrow_amount;
                 $new_balance = $new_credit - floatval($exists['total_payment']);
-                $updateCredit = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                $updateCredit->execute([$new_credit, $new_balance, $customer_name]);
+                $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")
+                    ->execute([$new_credit, $new_balance, $customer_name]);
             } else {
-                $insertCredit = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
-                $insertCredit->execute([$customer_name, $borrow_amount, $borrow_amount]);
+                $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)")
+                    ->execute([$customer_name, $borrow_amount, $borrow_amount]);
             }
 
             $message = "Cash lending recorded successfully!";
@@ -105,7 +205,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
 
             $total_inflow = $payment_amount + $interest_amount;
 
-            // Update credits table (add to total_payment)
             $checkCust = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
             $checkCust->execute([$customer_name]);
             $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
@@ -113,15 +212,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lending'])) {
             if ($exists) {
                 $new_payment = floatval($exists['total_payment']) + $total_inflow;
                 $new_balance = floatval($exists['store_credit']) - $new_payment;
-                
-                $updateCredit = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?");
-                $updateCredit->execute([$new_payment, $new_balance, $customer_name]);
+                $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")
+                    ->execute([$new_payment, $new_balance, $customer_name]);
             } else {
                 $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, 0.00, ?, ?)")
                     ->execute([$customer_name, $total_inflow, -$total_inflow]);
             }
 
-            // Log payment
             $logStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES ('-', ?, 0, 'Cash Lending Payment', ?, 'Payment / Interest', 'Money Lending', ?)");
             $logStmt->execute([$date_sold, $customer_name, $total_inflow]);
 
@@ -245,27 +342,27 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Description</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Interest (10%/mo)</th>
                             <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Amount</th>
+                            <?php if ($is_admin): ?>
+                                <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Actions</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200 text-sm bg-white">
                         <?php if (!empty($lendings)): ?>
                             <?php foreach ($lendings as $l): ?>
                                 <?php 
-                                    // Compute months elapsed from transaction date to today (or use max(1, months))
                                     $tx_date = new DateTime($l['date_sold']);
                                     $current_date = new DateTime();
                                     $interval = $tx_date->diff($current_date);
                                     
-                                    // Total months = years * 12 + months (with a minimum of 1 month or fractional months if preferred)
                                     $months = ($interval->y * 12) + $interval->m;
                                     if ($interval->d > 0) {
-                                        $months += ($interval->d / 30); // fractional consideration or keep full months
+                                        $months += ($interval->d / 30);
                                     }
                                     if ($months < 1) {
-                                        $months = 1; // Minimum 1 month computation
+                                        $months = 1;
                                     }
 
-                                    // Interest = Borrowed Amount * 10% * number of months
                                     $computed_interest = 0.00;
                                     if ($l['remarks'] === 'Cash Lending') {
                                         $computed_interest = floatval($l['total_amount']) * 0.10 * $months;
@@ -290,17 +387,50 @@ try {
                                         <?php endif; ?>
                                     </td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($l['total_amount'], 2) ?></td>
+                                    
+                                    <?php if ($is_admin): ?>
+                                        <td class="px-3 py-3 text-center space-x-2">
+                                            <button onclick="openEditModal(<?= $l['id'] ?>, '<?= htmlspecialchars($l['customer_name'], ENT_QUOTES) ?>', '<?= $l['date_sold'] ?>', <?= $l['total_amount'] ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
+                                            <a href="lending.php?delete_id=<?= $l['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
+                                        </td>
+                                    <?php endif; ?>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="6" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
+                                <td colspan="<?= $is_admin ? 7 : 6 ?>" class="px-4 py-4 text-center text-gray-500">No transaction records found.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="editModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">Edit Transaction</h2>
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="edit_id" id="edit_id">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Customer Name</label>
+                <input type="text" name="customer_name" id="edit_customer_name" readonly class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 shadow-sm p-2 border">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" name="date_sold" id="edit_date_sold" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Amount (₱)</label>
+                <input type="number" step="0.01" name="total_amount" id="edit_total_amount" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" onclick="closeEditModal()" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 font-semibold text-sm">Cancel</button>
+                <button type="submit" name="update_lending" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 font-semibold text-sm">Save Changes</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -338,7 +468,6 @@ function handleCustomerSelectChange(selectElem) {
                 let opt = document.createElement('option');
                 opt.value = newName;
                 opt.textContent = newName;
-                selectEmp = selectElem;
                 selectElem.insertBefore(opt, selectElem.options[2]);
             }
             selectElem.value = newName;
@@ -346,6 +475,18 @@ function handleCustomerSelectChange(selectElem) {
             selectElem.value = "";
         }
     }
+}
+
+function openEditModal(id, customer, date, amount) {
+    document.getElementById('edit_id').value = id;
+    document.getElementById('edit_customer_name').value = customer;
+    document.getElementById('edit_date_sold').value = date;
+    document.getElementById('edit_total_amount').value = amount;
+    document.getElementById('editModal').classList.remove('hidden');
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').classList.add('hidden');
 }
 
 // Search filter for table
