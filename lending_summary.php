@@ -2,13 +2,43 @@
 require_once 'db.php';
 include 'header.php';
 
-// Fetch summary per customer from credits table or stockouts for Money Lending
+// Fetch summary per customer from credits table and stockouts for lending details
 try {
     $stmt = $pdo->query("SELECT customer_name, store_credit, total_payment, total_balance FROM credits WHERE store_credit > 0 OR total_balance > 0 ORDER BY customer_name ASC");
     $summaries = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Compute totals
+    // Fetch all active cash borrowing records to compute exact duration interest per customer
+    $lendingStmt = $pdo->query("SELECT customer_name, date_sold, total_amount FROM stockouts WHERE remarks = 'Cash Lending'");
+    $all_lendings = $lendingStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Group lendings and compute total interest per customer
+    $customer_interests = [];
+    $current_date = new DateTime();
+
+    foreach ($all_lendings as $l) {
+        $c_name = $l['customer_name'];
+        $tx_date = new DateTime($l['date_sold']);
+        $interval = $tx_date->diff($current_date);
+        
+        $months = ($interval->y * 12) + $interval->m;
+        if ($interval->d > 0) {
+            $months += ($interval->d / 30);
+        }
+        if ($months < 1) {
+            $months = 1;
+        }
+
+        $interest = floatval($l['total_amount']) * 0.10 * $months;
+
+        if (!isset($customer_interests[$c_name])) {
+            $customer_interests[$c_name] = 0;
+        }
+        $customer_interests[$c_name] += $interest;
+    }
+
+    // Compute grand totals
     $grand_total_lending = 0;
+    $grand_total_interest = 0;
     $grand_total_payment = 0;
     $grand_total_balance = 0;
 
@@ -17,9 +47,16 @@ try {
         $grand_total_payment += floatval($s['total_payment']);
         $grand_total_balance += floatval($s['total_balance']);
     }
+    
+    foreach ($customer_interests as $intr) {
+        $grand_total_interest += $intr;
+    }
+
 } catch (PDOException $e) {
     $summaries = [];
+    $customer_interests = [];
     $grand_total_lending = 0;
+    $grand_total_interest = 0;
     $grand_total_payment = 0;
     $grand_total_balance = 0;
 }
@@ -29,7 +66,7 @@ try {
     <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">📊 Cash Lending Summary Report</h1>
-            <p class="text-sm text-gray-600">Overview of total active balances, total loans, and payments per customer.</p>
+            <p class="text-sm text-gray-600">Overview of total active balances, total loans, computed interest, and payments per customer.</p>
         </div>
         <div>
             <a href="lending.php" class="bg-gray-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm hover:bg-gray-700 transition text-sm">
@@ -39,13 +76,17 @@ try {
     </div>
 
     <!-- Summary Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-500">
             <p class="text-sm font-medium text-gray-500">Total Cash Loaned Out</p>
             <h3 class="text-2xl font-bold text-gray-900 mt-1">₱<?= number_format($grand_total_lending, 2) ?></h3>
         </div>
+        <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-amber-500">
+            <p class="text-sm font-medium text-gray-500">Total Computed Interest (10%)</p>
+            <h3 class="text-2xl font-bold text-amber-600 mt-1">₱<?= number_format($grand_total_interest, 2) ?></h3>
+        </div>
         <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-green-500">
-            <p class="text-sm font-medium text-gray-500">Total Collected Payments & Interest</p>
+            <p class="text-sm font-medium text-gray-500">Total Collected Payments</p>
             <h3 class="text-2xl font-bold text-gray-900 mt-1">₱<?= number_format($grand_total_payment, 2) ?></h3>
         </div>
         <div class="bg-white p-6 rounded-xl shadow-md border-l-4 border-teal-500">
@@ -57,7 +98,7 @@ try {
     <!-- Customer Summary Table -->
     <div class="bg-white p-6 rounded-xl shadow-md">
         <div class="flex justify-between items-center mb-4">
-            <h2 class="text-lg font-bold text-gray-800">Customer Balance Breakdown</h2>
+            <h2 class="text-lg font-bold text-gray-800">Customer Balance & Interest Breakdown</h2>
             <input type="text" id="searchSummary" placeholder="Search customer..." class="border rounded-md px-3 py-1 text-sm">
         </div>
 
@@ -67,6 +108,7 @@ try {
                     <tr>
                         <th class="px-4 py-3 text-left text-xs font-bold text-gray-800 uppercase">Customer Name</th>
                         <th class="px-4 py-3 text-right text-xs font-bold text-gray-800 uppercase">Total Borrowed</th>
+                        <th class="px-4 py-3 text-right text-xs font-bold text-gray-800 uppercase">Computed Interest (10%/mo)</th>
                         <th class="px-4 py-3 text-right text-xs font-bold text-gray-800 uppercase">Total Paid</th>
                         <th class="px-4 py-3 text-right text-xs font-bold text-gray-800 uppercase">Remaining Balance</th>
                     </tr>
@@ -74,16 +116,21 @@ try {
                 <tbody class="divide-y divide-gray-200 text-sm bg-white">
                     <?php if (!empty($summaries)): ?>
                         <?php foreach ($summaries as $row): ?>
+                            <?php 
+                                $c_name = $row['customer_name'];
+                                $c_interest = $customer_interests[$c_name] ?? 0;
+                            ?>
                             <tr class="hover:bg-gray-50 transition">
-                                <td class="px-4 py-3 text-gray-900 font-medium"><?= htmlspecialchars($row['customer_name']) ?></td>
+                                <td class="px-4 py-3 text-gray-900 font-medium"><?= htmlspecialchars($c_name) ?></td>
                                 <td class="px-4 py-3 text-right text-gray-700">₱<?= number_format($row['store_credit'], 2) ?></td>
+                                <td class="px-4 py-3 text-right text-amber-600 font-semibold">₱<?= number_format($c_interest, 2) ?></td>
                                 <td class="px-4 py-3 text-right text-green-600 font-semibold">₱<?= number_format($row['total_payment'], 2) ?></td>
                                 <td class="px-4 py-3 text-right text-teal-800 font-bold">₱<?= number_format($row['total_balance'], 2) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="4" class="px-4 py-4 text-center text-gray-500">No active summary records found.</td>
+                            <td colspan="5" class="px-4 py-4 text-center text-gray-500">No active summary records found.</td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
