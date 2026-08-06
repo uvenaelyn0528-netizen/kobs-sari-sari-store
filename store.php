@@ -1,9 +1,17 @@
+<?>
 <?php
 require_once 'db.php';
 include 'header.php';
 ?>
 
 <div class="container mx-auto px-4 py-12">
+    <!-- Top Bar with Back Button -->
+    <div class="flex justify-between items-center max-w-4xl mx-auto mb-6">
+        <a href="index.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
+            &larr; Back to Dashboard
+        </a>
+    </div>
+
     <div class="text-center mb-10">
         <h1 class="text-3xl font-bold text-gray-800">🏪 Store Management</h1>
         <p class="text-gray-600 mt-2">Pumili ng opsyon sa ibaba upang pamahalaan ang mga produkto, stockouts, at credit list.</p>
