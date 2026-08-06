@@ -12,83 +12,43 @@ $role = strtolower(trim($_SESSION['role'] ?? 'admin'));
         <p class="text-gray-600 mt-2">Welcome, <?= htmlspecialchars($_SESSION['username'] ?? 'User') ?>! (Role: <span class="capitalize font-semibold"><?= htmlspecialchars($role) ?></span>)</p>
     </div>
 
-    <!-- Main Navigation Grid -->
+    <!-- Main Navigation Grid - All buttons clickable for everyone -->
     <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 max-w-6xl mx-auto">
         
-        <!-- Store Management Button -->
-        <?php if ($role === 'admin' || $role === 'tindera'): ?>
-            <a href="store.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-indigo-600 transition transform hover:-translate-y-1 text-center group">
-                <div class="text-4xl mb-3">🏪</div>
-                <h2 class="text-lg font-bold text-gray-800 group-hover:text-indigo-600 transition">Store Management</h2>
-                <p class="text-xs text-gray-500 mt-1">Produkto, stockouts, at credit list.</p>
-            </a>
-        <?php else: ?>
-            <div class="bg-gray-100 p-6 rounded-xl shadow-sm border-t-4 border-gray-400 text-center opacity-60 cursor-not-allowed">
-                <div class="text-4xl mb-3">🔒</div>
-                <h2 class="text-lg font-bold text-gray-500">Store Management</h2>
-                <p class="text-xs text-gray-400 mt-1">Viewer mode (Restricted)</p>
-            </div>
-        <?php endif; ?>
+        <!-- Store Management -->
+        <a href="store.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-indigo-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">🏪</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-indigo-600 transition">Store Management</h2>
+            <p class="text-xs text-gray-500 mt-1">Produkto, stockouts, at credit list.</p>
+        </a>
 
-        <!-- GCash In-Charge Button -->
-        <?php if ($role === 'admin' || $role === 'gcash_incharge'): ?>
-            <a href="gcash.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-blue-600 transition transform hover:-translate-y-1 text-center group">
-                <div class="text-4xl mb-3">📱</div>
-                <h2 class="text-lg font-bold text-gray-800 group-hover:text-blue-600 transition">GCash In-Charge</h2>
-                <p class="text-xs text-gray-500 mt-1">Transaksyon at balanse ng GCash.</p>
-            </a>
-        <?php else: ?>
-            <div class="bg-gray-100 p-6 rounded-xl shadow-sm border-t-4 border-gray-400 text-center opacity-70">
-                <div class="text-4xl mb-3">👀</div>
-                <h2 class="text-lg font-bold text-gray-600">GCash In-Charge</h2>
-                <p class="text-xs text-gray-400 mt-1">Viewer status only</p>
-            </div>
-        <?php endif; ?>
+        <!-- GCash In-Charge -->
+        <a href="gcash.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-blue-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">📱</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-blue-600 transition">GCash In-Charge</h2>
+            <p class="text-xs text-gray-500 mt-1">Transaksyon at balanse ng GCash.</p>
+        </a>
 
-        <!-- Lending Button -->
-        <?php if ($role === 'admin'): ?>
-            <a href="lending.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-green-600 transition transform hover:-translate-y-1 text-center group">
-                <div class="text-4xl mb-3">💰</div>
-                <h2 class="text-lg font-bold text-gray-800 group-hover:text-green-600 transition">Lending</h2>
-                <p class="text-xs text-gray-500 mt-1">Pamahalaan ang cash lending.</p>
-            </a>
-        <?php else: ?>
-            <div class="bg-gray-100 p-6 rounded-xl shadow-sm border-t-4 border-gray-400 text-center opacity-70">
-                <div class="text-4xl mb-3">👀</div>
-                <h2 class="text-lg font-bold text-gray-600">Lending</h2>
-                <p class="text-xs text-gray-400 mt-1">Viewer status only</p>
-            </div>
-        <?php endif; ?>
+        <!-- Lending -->
+        <a href="lending.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-green-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">💰</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-green-600 transition">Lending</h2>
+            <p class="text-xs text-gray-500 mt-1">Pamahalaan ang cash lending.</p>
+        </a>
 
-        <!-- ATM Withdrawal Button -->
-        <?php if ($role === 'admin'): ?>
-            <a href="atm.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-yellow-600 transition transform hover:-translate-y-1 text-center group">
-                <div class="text-4xl mb-3">💳</div>
-                <h2 class="text-lg font-bold text-gray-800 group-hover:text-yellow-600 transition">ATM Withdrawal</h2>
-                <p class="text-xs text-gray-500 mt-1">Itala ang mga ATM withdrawals.</p>
-            </a>
-        <?php else: ?>
-            <div class="bg-gray-100 p-6 rounded-xl shadow-sm border-t-4 border-gray-400 text-center opacity-70">
-                <div class="text-4xl mb-3">👀</div>
-                <h2 class="text-lg font-bold text-gray-600">ATM Withdrawal</h2>
-                <p class="text-xs text-gray-400 mt-1">Viewer status only</p>
-            </div>
-        <?php endif; ?>
+        <!-- ATM Withdrawal -->
+        <a href="atm.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-yellow-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">💳</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-yellow-600 transition">ATM Withdrawal</h2>
+            <p class="text-xs text-gray-500 mt-1">Itala ang mga ATM withdrawals.</p>
+        </a>
 
-        <!-- Admin Settings Button -->
-        <?php if ($role === 'admin'): ?>
-            <a href="users.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-purple-600 transition transform hover:-translate-y-1 text-center group">
-                <div class="text-4xl mb-3">⚙️</div>
-                <h2 class="text-lg font-bold text-gray-800 group-hover:text-purple-600 transition">Admin Settings</h2>
-                <p class="text-xs text-gray-500 mt-1">Pamahalaan ang mga user.</p>
-            </a>
-        <?php else: ?>
-            <div class="bg-gray-100 p-6 rounded-xl shadow-sm border-t-4 border-gray-400 text-center opacity-70">
-                <div class="text-4xl mb-3">👀</div>
-                <h2 class="text-lg font-bold text-gray-600">Admin Settings</h2>
-                <p class="text-xs text-gray-400 mt-1">Viewer status only</p>
-            </div>
-        <?php endif; ?>
+        <!-- Admin Settings -->
+        <a href="users.php" class="bg-white p-6 rounded-xl shadow-md hover:shadow-xl border-t-4 border-purple-600 transition transform hover:-translate-y-1 text-center group">
+            <div class="text-4xl mb-3">⚙️</div>
+            <h2 class="text-lg font-bold text-gray-800 group-hover:text-purple-600 transition">Admin Settings</h2>
+            <p class="text-xs text-gray-500 mt-1">Pamahalaan ang mga user.</p>
+        </a>
 
     </div>
 </div>
