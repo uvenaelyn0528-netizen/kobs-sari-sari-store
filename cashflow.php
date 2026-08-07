@@ -170,27 +170,21 @@ $remaining_cash = $total_received - $total_expenses;
         </a>
     </div>
 
-    <!-- Top Header & Import CSV Section side-by-side -->
-    <div class="mb-6 flex flex-col lg:flex-row lg:justify-between lg:items-start gap-6">
+    <!-- Top Header & Compact Import Form side-by-side -->
+    <div class="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-md">
         <div>
-            <h1 class="text-2xl font-bold text-gray-800">📈 KOBS Cashflow </h1>
-            <p class="text-xs text-gray-500 mt-1">Upload your cashflow CSV or log entries manually.</p>
+            <h1 class="text-xl font-bold text-gray-800">📈 Cashflow Tracking & Import</h1>
+            <p class="text-xs text-gray-500">Upload your cashflow CSV or log entries manually.</p>
         </div>
 
         <?php if (!$is_viewer): ?>
-        <!-- Import Cashflow CSV Box placed on the right side of the header title -->
-        <div class="bg-white p-5 rounded-xl shadow-md w-full lg:w-[550px]">
-            <h2 class="text-base font-bold text-gray-800 mb-1">📁 Import Cashflow CSV</h2>
-            <p class="text-xs text-gray-500 mb-3">Upload your CSV with columns: `Date`, `Particulars`, `Amount`, `Name`, `Remarks`.</p>
-            <form method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row items-center gap-3">
-                <div class="w-full sm:flex-1">
-                    <input type="file" name="csv_file" accept=".csv" required class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-                </div>
-                <button type="submit" name="import_cashflow_csv" class="w-full sm:w-auto bg-emerald-600 text-white py-1.5 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow text-xs whitespace-nowrap">
-                    Upload & Import
-                </button>
-            </form>
-        </div>
+        <!-- Compact Import File Bar -->
+        <form method="POST" enctype="multipart/form-data" class="flex items-center gap-2 w-full sm:w-auto">
+            <input type="file" name="csv_file" accept=".csv" required class="block w-full sm:w-auto text-xs text-gray-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            <button type="submit" name="import_cashflow_csv" class="bg-emerald-600 text-white py-1.5 px-3 rounded-md hover:bg-emerald-700 transition font-semibold shadow text-xs whitespace-nowrap">
+                Import File
+            </button>
+        </form>
         <?php endif; ?>
     </div>
 
