@@ -10,7 +10,7 @@ include 'header.php';
 $message = '';
 $message_type = '';
 
-// Handle Add/Update Partner Share
+// Handle Add Partner Share
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_share'])) {
     $partner_name      = trim($_POST['partner_name'] ?? '');
     $shares_count      = floatval($_POST['shares_count'] ?? 0);
@@ -35,8 +35,10 @@ try {
     $shares = [];
 }
 
-// Fetch Total Dividend Pool dynamically if linked to another table/setting, or set default
-// (Change this logic if your total dividend comes from a database query or settings table)
+// Fixed amount per share
+$amount_per_share = 3000.00;
+
+// Fetch Total Dividend Pool dynamically or define if fixed (can be linked to your totals)
 $total_dividend_pool = 275419.80; 
 
 // Calculate Totals for Summary Cards
@@ -46,7 +48,6 @@ foreach ($shares as $s) {
     $total_capital += floatval($s['investment_amount'] ?? 0);
     $total_shares_count += floatval($s['shares_count'] ?? 0);
 }
-$amount_per_share = $total_shares_count > 0 ? $total_dividend_pool / $total_shares_count : 0;
 ?>
 
 <div class="container mx-auto px-4 py-8">
@@ -65,7 +66,7 @@ $amount_per_share = $total_shares_count > 0 ? $total_dividend_pool / $total_shar
             <p class="text-xs text-gray-500 mt-1">Real-time breakdown of shares, capital contributions, and computed dividends.</p>
         </div>
 
-        <!-- Summary Metric Cards (Matching Excel Header) -->
+        <!-- Summary Metric Cards -->
         <div class="flex flex-wrap gap-3">
             <div class="bg-white px-4 py-2 rounded-lg shadow border border-gray-200 text-center">
                 <span class="block text-xs text-gray-500 uppercase font-medium">Total Capital</span>
@@ -138,9 +139,10 @@ $amount_per_share = $total_shares_count > 0 ? $total_dividend_pool / $total_shar
                                 $shares_cnt = floatval($s['shares_count'] ?? 0);
                                 $amount_val = floatval($s['investment_amount'] ?? 0);
                                 
-                                // Formulas matching spreadsheet logic
+                                // Calculations
                                 $share_percentage = $total_shares_count > 0 ? ($shares_cnt / $total_shares_count) * 100 : 0;
-                                $dividend_val = $shares_cnt * $amount_per_share;
+                                // Dividend calculation based on percentage share proportion of total dividend pool or fixed amount per share factor
+                                $dividend_val = ($share_percentage / 100) * $total_dividend_pool;
                                 $total_money = $amount_val + $dividend_val;
                             ?>
                                 <tr class="hover:bg-gray-50 transition">
