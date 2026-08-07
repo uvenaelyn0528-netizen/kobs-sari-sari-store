@@ -170,9 +170,28 @@ $remaining_cash = $total_received - $total_expenses;
         </a>
     </div>
 
-    <div class="mb-6">
-        <h1 class="text-2xl font-bold text-gray-800">📈 Cashflow Tracking & Import</h1>
-        <p class="text-xs text-gray-500 mt-1">Upload your cashflow CSV or log entries manually.</p>
+    <!-- Top Header & Import CSV Section side-by-side -->
+    <div class="mb-6 flex flex-col lg:flex-row lg:justify-between lg:items-start gap-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">📈 KOBS Cashflow </h1>
+            <p class="text-xs text-gray-500 mt-1">Upload your cashflow CSV or log entries manually.</p>
+        </div>
+
+        <?php if (!$is_viewer): ?>
+        <!-- Import Cashflow CSV Box placed on the right side of the header title -->
+        <div class="bg-white p-5 rounded-xl shadow-md w-full lg:w-[550px]">
+            <h2 class="text-base font-bold text-gray-800 mb-1">📁 Import Cashflow CSV</h2>
+            <p class="text-xs text-gray-500 mb-3">Upload your CSV with columns: `Date`, `Particulars`, `Amount`, `Name`, `Remarks`.</p>
+            <form method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row items-center gap-3">
+                <div class="w-full sm:flex-1">
+                    <input type="file" name="csv_file" accept=".csv" required class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                </div>
+                <button type="submit" name="import_cashflow_csv" class="w-full sm:w-auto bg-emerald-600 text-white py-1.5 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow text-xs whitespace-nowrap">
+                    Upload & Import
+                </button>
+            </form>
+        </div>
+        <?php endif; ?>
     </div>
 
     <?php if (!empty($message)): ?>
@@ -182,7 +201,7 @@ $remaining_cash = $total_received - $total_expenses;
     <?php endif; ?>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- Left Sidebar: Manual Entry Form Only -->
+        <!-- Left Sidebar: Manual Entry Form -->
         <?php if (!$is_viewer): ?>
         <div class="space-y-6">
             <div class="bg-white p-6 rounded-xl shadow-md">
@@ -219,24 +238,8 @@ $remaining_cash = $total_received - $total_expenses;
         </div>
         <?php endif; ?>
 
-        <!-- Right Content Section: CSV Import, Dashboard Cards, and Transaction Table -->
+        <!-- Right Content Section: Summary Dashboard & Transaction Table -->
         <div class="<?= $is_viewer ? 'lg:col-span-3' : 'lg:col-span-2' ?> space-y-6">
-            <?php if (!$is_viewer): ?>
-            <!-- CSV Import Box placed above dashboard -->
-            <div class="bg-white p-6 rounded-xl shadow-md">
-                <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import Cashflow CSV</h2>
-                <p class="text-xs text-gray-500 mb-4">Upload your CSV with columns: `Date`, `Particulars`, `Amount`, `Name`, `Remarks`.</p>
-                <form method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row items-center gap-4">
-                    <div class="w-full sm:flex-1">
-                        <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-                    </div>
-                    <button type="submit" name="import_cashflow_csv" class="w-full sm:w-auto bg-emerald-600 text-white py-2 px-6 rounded-md hover:bg-emerald-700 transition font-semibold shadow text-sm whitespace-nowrap">
-                        Upload & Import Cashflow
-                    </button>
-                </form>
-            </div>
-            <?php endif; ?>
-
             <!-- Summary Cards -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-500">
