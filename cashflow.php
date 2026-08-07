@@ -137,13 +137,28 @@ if ($is_admin && isset($_GET['delete_id'])) {
     }
 }
 
-// Fetch Cashflow Records
+// Fetch Cashflow Records & Compute Totals
 try {
     $stmt = $pdo->query("SELECT * FROM cashflow ORDER BY id DESC");
     $cashflows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $cashflows = [];
 }
+
+$total_received = 0;
+$total_expenses = 0;
+
+foreach ($cashflows as $row) {
+    $amt = floatval($row['amount'] ?? 0);
+    $rem = strtolower(trim($row['remarks'] ?? ''));
+    if ($rem === 'expenses' || $rem === 'expense') {
+        $total_expenses += $amt;
+    } else {
+        // Default everything else to Cash Received
+        $total_received += $amt;
+    }
+}
+$remaining_cash = $total_received - $total_expenses;
 ?>
 
 <div class="container mx-auto px-4 py-8">
@@ -219,51 +234,70 @@ try {
         </div>
         <?php endif; ?>
 
-        <!-- Cashflow Transaction Table -->
-        <div class="<?= $is_viewer ? 'lg:col-span-3' : 'lg:col-span-2' ?> bg-white p-6 rounded-xl shadow-md">
-            <h2 class="text-lg font-bold text-gray-800 mb-4">Cashflow Transactions</h2>
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Particulars</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remarks</th>
-                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                            <?php if ($is_admin): ?>
-                                <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
-                            <?php endif; ?>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200">
-                        <?php if (!empty($cashflows)): ?>
-                            <?php foreach ($cashflows as $row): ?>
-                                <tr class="hover:bg-gray-50 transition">
-                                    <td class="px-3 py-3 text-gray-700 whitespace-nowrap"><?= htmlspecialchars($row['date'] ?? '') ?></td>
-                                    <td class="px-3 py-3 font-semibold text-gray-900"><?= htmlspecialchars($row['particulars'] ?? '') ?></td>
-                                    <td class="px-3 py-3 text-gray-700"><?= htmlspecialchars($row['name'] ?? '-') ?></td>
-                                    <td class="px-3 py-3 text-gray-600">
-                                        <span class="px-2 py-1 rounded text-xs <?= (strtolower($row['remarks'] ?? '') === 'cash received') ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800' ?>">
-                                            <?= htmlspecialchars($row['remarks'] ?? '') ?>
-                                        </span>
-                                    </td>
-                                    <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format(floatval($row['amount'] ?? 0), 2) ?></td>
-                                    <?php if ($is_admin): ?>
-                                        <td class="px-3 py-3 text-center whitespace-space space-x-2">
-                                            <button onclick="openEditModal(<?= htmlspecialchars(json_encode($row)) ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded transition">Edit</button>
-                                            <a href="cashflow.php?delete_id=<?= $row['id'] ?>" onclick="return confirm('Are you sure you want to delete this cashflow entry?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded transition">Delete</a>
-                                        </td>
-                                    <?php endif; ?>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
+        <!-- Cashflow Transaction Section & Summary -->
+        <div class="<?= $is_viewer ? 'lg:col-span-3' : 'lg:col-span-2' ?> space-y-6">
+            <!-- Summary Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-500">
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Amount Received</p>
+                    <p class="text-xl font-bold text-green-700 mt-1">₱<?= number_format($total_received, 2) ?></p>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-red-500">
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Expenses</p>
+                    <p class="text-xl font-bold text-red-700 mt-1">₱<?= number_format($total_expenses, 2) ?></p>
+                </div>
+                <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-indigo-500">
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Remaining Cash on Hand</p>
+                    <p class="text-xl font-bold text-indigo-700 mt-1">₱<?= number_format($remaining_cash, 2) ?></p>
+                </div>
+            </div>
+
+            <!-- Cashflow Transaction Table -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">Cashflow Transactions</h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead class="bg-gray-50">
                             <tr>
-                                <td colspan="<?= $is_admin ? '6' : '5' ?>" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file or add entries manually.</td>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Particulars</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remarks</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                                <?php if ($is_admin): ?>
+                                    <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                <?php endif; ?>
                             </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            <?php if (!empty($cashflows)): ?>
+                                <?php foreach ($cashflows as $row): ?>
+                                    <tr class="hover:bg-gray-50 transition">
+                                        <td class="px-3 py-3 text-gray-700 whitespace-nowrap"><?= htmlspecialchars($row['date'] ?? '') ?></td>
+                                        <td class="px-3 py-3 font-semibold text-gray-900"><?= htmlspecialchars($row['particulars'] ?? '') ?></td>
+                                        <td class="px-3 py-3 text-gray-700"><?= htmlspecialchars($row['name'] ?? '-') ?></td>
+                                        <td class="px-3 py-3 text-gray-600">
+                                            <span class="px-2 py-1 rounded text-xs <?= (strtolower($row['remarks'] ?? '') === 'cash received') ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800' ?>">
+                                                <?= htmlspecialchars($row['remarks'] ?? '') ?>
+                                            </span>
+                                        </td>
+                                        <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format(floatval($row['amount'] ?? 0), 2) ?></td>
+                                        <?php if ($is_admin): ?>
+                                            <td class="px-3 py-3 text-center whitespace-space space-x-2">
+                                                <button onclick="openEditModal(<?= htmlspecialchars(json_encode($row)) ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded transition">Edit</button>
+                                                <a href="cashflow.php?delete_id=<?= $row['id'] ?>" onclick="return confirm('Are you sure you want to delete this cashflow entry?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded transition">Delete</a>
+                                            </td>
+                                        <?php endif; ?>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <tr>
+                                    <td colspan="<?= $is_admin ? '6' : '5' ?>" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file or add entries manually.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
