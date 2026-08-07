@@ -182,23 +182,9 @@ $remaining_cash = $total_received - $total_expenses;
     <?php endif; ?>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Sidebar: Manual Entry Form Only -->
         <?php if (!$is_viewer): ?>
         <div class="space-y-6">
-            <!-- CSV Import Box -->
-            <div class="bg-white p-6 rounded-xl shadow-md">
-                <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import Cashflow CSV</h2>
-                <p class="text-xs text-gray-500 mb-4">Upload your CSV with columns: `Date`, `Particulars`, `Amount`, `Name`, `Remarks`.</p>
-                <form method="POST" enctype="multipart/form-data" class="space-y-4">
-                    <div>
-                        <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-                    </div>
-                    <button type="submit" name="import_cashflow_csv" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow">
-                        Upload & Import Cashflow
-                    </button>
-                </form>
-            </div>
-
-            <!-- Manual Single Entry Form -->
             <div class="bg-white p-6 rounded-xl shadow-md">
                 <h2 class="text-lg font-bold text-gray-800 mb-4">✍️ Add Manual Entry</h2>
                 <form method="POST" class="space-y-4">
@@ -233,8 +219,24 @@ $remaining_cash = $total_received - $total_expenses;
         </div>
         <?php endif; ?>
 
-        <!-- Cashflow Transaction Section & Summary -->
+        <!-- Right Content Section: CSV Import, Dashboard Cards, and Transaction Table -->
         <div class="<?= $is_viewer ? 'lg:col-span-3' : 'lg:col-span-2' ?> space-y-6">
+            <?php if (!$is_viewer): ?>
+            <!-- CSV Import Box placed above dashboard -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import Cashflow CSV</h2>
+                <p class="text-xs text-gray-500 mb-4">Upload your CSV with columns: `Date`, `Particulars`, `Amount`, `Name`, `Remarks`.</p>
+                <form method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row items-center gap-4">
+                    <div class="w-full sm:flex-1">
+                        <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+                    <button type="submit" name="import_cashflow_csv" class="w-full sm:w-auto bg-emerald-600 text-white py-2 px-6 rounded-md hover:bg-emerald-700 transition font-semibold shadow text-sm whitespace-nowrap">
+                        Upload & Import Cashflow
+                    </button>
+                </form>
+            </div>
+            <?php endif; ?>
+
             <!-- Summary Cards -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-500">
