@@ -9,12 +9,64 @@ include 'header.php';
 
 $message = '';
 $message_type = '';
+$amount_per_share = 3000.00;
+$total_dividend_pool = 275419.80; 
 
-// Handle Add Partner Share
+// Handle CSV Import
+if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import_csv'])) {
+    if (isset($_FILES['csv_file']) && $_FILES['csv_file']['error'] === UPLOAD_ERR_OK) {
+        $fileTmpPath = $_FILES['csv_file']['tmp_name'];
+        $fileName = $_FILES['csv_file']['name'];
+        $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        if ($fileExtension === 'csv') {
+            if (($handle = fopen($fileTmpPath, 'r')) !== FALSE) {
+                // Skip header row if it exists
+                $header = fgetcsv($handle, 1000, ",");
+                
+                $imported_count = 0;
+                while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
+                    // Assuming structure: Col 0 = NO., Col 1 = NAME, Col 2 = # of Shares, Col 3 = CAPITAL (optional)
+                    if (isset($data[1]) && trim($data[1]) !== '') {
+                        $partner_name = trim($data[1]);
+                        $shares_count = floatval($data[2] ?? 0);
+                        // Automatically compute investment amount if amount column is empty or dash (-)
+                        $investment_amount = $shares_count * $amount_per_share;
+
+                        // Insert into database (using ON DUPLICATE KEY UPDATE if partner name is unique)
+                        try {
+                            $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) 
+                                                   VALUES (?, ?, ?) 
+                                                   ON DUPLICATE KEY UPDATE shares_count = VALUES(shares_count), investment_amount = VALUES(investment_amount)");
+                            $stmt->execute([$partner_name, $shares_count, $investment_amount]);
+                            $imported_count++;
+                        } catch (PDOException $e) {
+                            // Skip or log error silently on individual row fail
+                        }
+                    }
+                }
+                fclose($handle);
+                $message = "Successfully imported $imported_count records from CSV!";
+                $message_type = "success";
+            } else {
+                $message = "Error opening the uploaded file.";
+                $message_type = "error";
+            }
+        } else {
+            $message = "Please upload a valid .csv file.";
+            $message_type = "error";
+        }
+    } else {
+        $message = "Please select a file to upload.";
+        $message_type = "error";
+    }
+}
+
+// Handle Single Add Partner Share Form
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_share'])) {
     $partner_name      = trim($_POST['partner_name'] ?? '');
     $shares_count      = floatval($_POST['shares_count'] ?? 0);
-    $investment_amount = floatval($_POST['investment_amount'] ?? 0);
+    $investment_amount = $shares_count * $amount_per_share;
 
     try {
         $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) VALUES (?, ?, ?)");
@@ -34,12 +86,6 @@ try {
 } catch (PDOException $e) {
     $shares = [];
 }
-
-// Fixed amount per share
-$amount_per_share = 3000.00;
-
-// Fetch Total Dividend Pool dynamically or define if fixed (can be linked to your totals)
-$total_dividend_pool = 275419.80; 
 
 // Calculate Totals for Summary Cards
 $total_capital = 0;
@@ -63,7 +109,7 @@ foreach ($shares as $s) {
     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">🤝 KOBS COOP Shares & Dividends</h1>
-            <p class="text-xs text-gray-500 mt-1">Real-time breakdown of shares, capital contributions, and computed dividends.</p>
+            <p class="text-xs text-gray-500 mt-1">Import CSV lists or manage shareholders directly.</p>
         </div>
 
         <!-- Summary Metric Cards -->
@@ -91,26 +137,38 @@ foreach ($shares as $s) {
 
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
         <?php if (!$is_viewer): ?>
-        <!-- Add Partner Form -->
-        <div class="bg-white p-6 rounded-xl shadow-md h-fit">
-            <h2 class="text-lg font-bold text-gray-800 mb-4">Add Partner Share</h2>
-            <form method="POST" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Partner Name</label>
-                    <input type="text" name="partner_name" placeholder="Pangalan ng Kasosyo" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700"># of Shares</label>
-                    <input type="number" step="any" name="shares_count" placeholder="0" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Capital Amount (₱)</label>
-                    <input type="number" step="0.01" name="investment_amount" placeholder="0.00" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
-                </div>
-                <button type="submit" name="add_share" class="w-full bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 transition font-semibold shadow">
-                    Save Partner Share
-                </button>
-            </form>
+        <div class="space-y-6">
+            <!-- CSV Import Box -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import CSV File</h2>
+                <p class="text-xs text-gray-500 mb-4">Upload your exported CSV file containing columns: `NO.`, `NAME`, `# of Shares`.</p>
+                <form method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <div>
+                        <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+                    <button type="submit" name="import_csv" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow">
+                        Upload & Import CSV
+                    </button>
+                </form>
+            </div>
+
+            <!-- Add Single Partner Form -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">Add Single Partner</h2>
+                <form method="POST" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Partner Name</label>
+                        <input type="text" name="partner_name" placeholder="Pangalan ng Kasosyo" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700"># of Shares</label>
+                        <input type="number" step="any" name="shares_count" placeholder="0" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <button type="submit" name="add_share" class="w-full bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 transition font-semibold shadow">
+                        Save Partner Share
+                    </button>
+                </form>
+            </div>
         </div>
         <?php endif; ?>
 
@@ -137,11 +195,9 @@ foreach ($shares as $s) {
                             $counter = 1;
                             foreach ($shares as $s): 
                                 $shares_cnt = floatval($s['shares_count'] ?? 0);
-                                $amount_val = floatval($s['investment_amount'] ?? 0);
+                                $amount_val = $shares_cnt * $amount_per_share; // Auto calculates amount using 3,000 multiplier
                                 
-                                // Calculations
                                 $share_percentage = $total_shares_count > 0 ? ($shares_cnt / $total_shares_count) * 100 : 0;
-                                // Dividend calculation based on percentage share proportion of total dividend pool or fixed amount per share factor
                                 $dividend_val = ($share_percentage / 100) * $total_dividend_pool;
                                 $total_money = $amount_val + $dividend_val;
                             ?>
@@ -158,7 +214,7 @@ foreach ($shares as $s) {
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="8" class="px-4 py-6 text-center text-gray-500">No share records found in database.</td>
+                                <td colspan="8" class="px-4 py-6 text-center text-gray-500">No share records found. Upload a CSV file or add partners manually.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
