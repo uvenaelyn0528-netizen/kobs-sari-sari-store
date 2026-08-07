@@ -31,7 +31,6 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
                 $nameIndex = array_search('name', $header);
                 $remarksIndex = array_search('remarks', $header);
 
-                // Fallbacks based on standard column layout (A=0, B=1, C=2, D=3, E=4)
                 if ($dateIndex === false) $dateIndex = 0;
                 if ($particularsIndex === false) $particularsIndex = 1;
                 if ($amountIndex === false) $amountIndex = 2;
@@ -53,7 +52,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
                             $stmt->execute([$date_val, $particulars_val, $amount_val, $name_val, $remarks_val]);
                             $imported_count++;
                         } catch (PDOException $e) {
-                            // Skip or log row error if table structure differs
+                            // Skip row error
                         }
                     }
                 }
@@ -74,17 +73,17 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
     }
 }
 
-// Handle Single Entry Add Form (if applicable)
+// Handle Manual Single Entry Form
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_entry'])) {
     $date_val        = trim($_POST['date'] ?? date('Y-m-d'));
-    $type_val        = trim($_POST['type'] ?? '');
-    $category_val    = trim($_POST['category'] ?? '');
+    $particulars_val = trim($_POST['particulars'] ?? '');
     $amount_val      = floatval($_POST['amount'] ?? 0);
-    $notes_val       = trim($_POST['notes'] ?? '');
+    $name_val        = trim($_POST['name'] ?? '');
+    $remarks_val     = trim($_POST['remarks'] ?? 'Cash Received');
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO cashflow (date, particulars, amount, remarks) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$date_val, $category_val, $amount_val, $type_val]);
+        $stmt = $pdo->prepare("INSERT INTO cashflow (date, particulars, amount, name, remarks) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$date_val, $particulars_val, $amount_val, $name_val, $remarks_val]);
         $message = "Cashflow entry added successfully!";
         $message_type = "success";
     } catch (PDOException $e) {
@@ -139,6 +138,39 @@ try {
                     </button>
                 </form>
             </div>
+
+            <!-- Manual Single Entry Form -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-lg font-bold text-gray-800 mb-4">✍️ Add Manual Entry</h2>
+                <form method="POST" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Date</label>
+                        <input type="text" name="date" placeholder="e.g., 18-Feb" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Particulars</label>
+                        <input type="text" name="particulars" placeholder="e.g., Share, Purchased, Sales Received" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Amount (₱)</label>
+                        <input type="number" step="any" name="amount" placeholder="0.00" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Name (Optional)</label>
+                        <input type="text" name="name" placeholder="Pangalan" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Remarks</label>
+                        <select name="remarks" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm bg-white">
+                            <option value="Cash Received">Cash Received</option>
+                            <option value="Expenses">Expenses</option>
+                        </select>
+                    </div>
+                    <button type="submit" name="add_entry" class="w-full bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 transition font-semibold shadow">
+                        Save Transaction Entry
+                    </button>
+                </form>
+            </div>
         </div>
         <?php endif; ?>
 
@@ -173,7 +205,7 @@ try {
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file to populate records.</td>
+                                <td colspan="5" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file or add entries manually.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
