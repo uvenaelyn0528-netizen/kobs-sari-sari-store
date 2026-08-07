@@ -21,15 +21,16 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
         if ($fileExtension === 'csv') {
             if (($handle = fopen($fileTmpPath, 'r')) !== FALSE) {
                 $header = fgetcsv($handle, 1000, ",");
+                
                 $header = array_map(function($h) {
-                    return strtolower(trim($h));
+                    return strtolower(trim(str_replace('"', '', $h)));
                 }, $header);
 
-                $dateIndex = array_search('date', $header);
+                $dateIndex        = array_search('date', $header);
                 $particularsIndex = array_search('particulars', $header);
-                $amountIndex = array_search('amount', $header);
-                $nameIndex = array_search('name', $header);
-                $remarksIndex = array_search('remarks', $header);
+                $amountIndex      = array_search('amount', $header);
+                $nameIndex        = array_search('name', $header);
+                $remarksIndex     = array_search('remarks', $header);
 
                 if ($dateIndex === false) $dateIndex = 0;
                 if ($particularsIndex === false) $particularsIndex = 1;
@@ -38,27 +39,37 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
                 if ($remarksIndex === false) $remarksIndex = 4;
 
                 $imported_count = 0;
-                while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
-                    $date_val = trim($data[$dateIndex] ?? '');
-                    $particulars_val = trim($data[$particularsIndex] ?? '');
-                    $amount_raw = $data[$amountIndex] ?? 0;
-                    $amount_val = floatval(str_replace(',', '', $amount_raw));
-                    $name_val = trim($data[$nameIndex] ?? '');
-                    $remarks_val = trim($data[$remarksIndex] ?? '');
+                $db_error = '';
 
-                    if (!empty($date_val) && !empty($particulars_val)) {
+                while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
+                    if (empty(array_filter($data))) continue;
+
+                    $date_val        = trim($data[$dateIndex] ?? '');
+                    $particulars_val = trim($data[$particularsIndex] ?? '');
+                    $amount_raw      = $data[$amountIndex] ?? 0;
+                    $amount_val      = floatval(str_replace([',', ' '], '', $amount_raw));
+                    $name_val        = trim($data[$nameIndex] ?? '');
+                    $remarks_val     = trim($data[$remarksIndex] ?? '');
+
+                    if (!empty($date_val) || !empty($particulars_val)) {
                         try {
                             $stmt = $pdo->prepare("INSERT INTO cashflow (date, particulars, amount, name, remarks) VALUES (?, ?, ?, ?, ?)");
                             $stmt->execute([$date_val, $particulars_val, $amount_val, $name_val, $remarks_val]);
                             $imported_count++;
                         } catch (PDOException $e) {
-                            // Skip row error
+                            $db_error = $e->getMessage();
                         }
                     }
                 }
                 fclose($handle);
-                $message = "Successfully imported $imported_count cashflow records from CSV!";
-                $message_type = "success";
+
+                if ($imported_count > 0) {
+                    $message = "Successfully imported $imported_count cashflow records from CSV!";
+                    $message_type = "success";
+                } else {
+                    $message = "Imported 0 records. Check if your CSV has data rows below the header." . ($db_error ? " Error: " . $db_error : "");
+                    $message_type = "error";
+                }
             } else {
                 $message = "Error opening the uploaded file.";
                 $message_type = "error";
@@ -75,7 +86,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
 
 // Handle Manual Single Entry Form
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_entry'])) {
-    $date_val        = trim($_POST['date'] ?? date('Y-m-d'));
+    $date_val        = trim($_POST['date'] ?? '');
     $particulars_val = trim($_POST['particulars'] ?? '');
     $amount_val      = floatval($_POST['amount'] ?? 0);
     $name_val        = trim($_POST['name'] ?? '');
@@ -88,6 +99,40 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_en
         $message_type = "success";
     } catch (PDOException $e) {
         $message = "Error: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle Edit Entry (Admin Only)
+if ($is_admin && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_entry'])) {
+    $id              = intval($_POST['id'] ?? 0);
+    $date_val        = trim($_POST['date'] ?? '');
+    $particulars_val = trim($_POST['particulars'] ?? '');
+    $amount_val      = floatval($_POST['amount'] ?? 0);
+    $name_val        = trim($_POST['name'] ?? '');
+    $remarks_val     = trim($_POST['remarks'] ?? 'Cash Received');
+
+    try {
+        $stmt = $pdo->prepare("UPDATE cashflow SET date = ?, particulars = ?, amount = ?, name = ?, remarks = ? WHERE id = ?");
+        $stmt->execute([$date_val, $particulars_val, $amount_val, $name_val, $remarks_val, $id]);
+        $message = "Cashflow entry updated successfully!";
+        $message_type = "success";
+    } catch (PDOException $e) {
+        $message = "Error updating entry: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle Delete Entry (Admin Only)
+if ($is_admin && isset($_GET['delete_id'])) {
+    $delete_id = intval($_GET['delete_id']);
+    try {
+        $stmt = $pdo->prepare("DELETE FROM cashflow WHERE id = ?");
+        $stmt->execute([$delete_id]);
+        $message = "Cashflow entry deleted successfully!";
+        $message_type = "success";
+    } catch (PDOException $e) {
+        $message = "Error deleting entry: " . $e->getMessage();
         $message_type = "error";
     }
 }
@@ -186,6 +231,9 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remarks</th>
                             <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <?php if ($is_admin): ?>
+                                <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
@@ -201,11 +249,17 @@ try {
                                         </span>
                                     </td>
                                     <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format(floatval($row['amount'] ?? 0), 2) ?></td>
+                                    <?php if ($is_admin): ?>
+                                        <td class="px-3 py-3 text-center whitespace-space space-x-2">
+                                            <button onclick="openEditModal(<?= htmlspecialchars(json_encode($row)) ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded transition">Edit</button>
+                                            <a href="cashflow.php?delete_id=<?= $row['id'] ?>" onclick="return confirm('Are you sure you want to delete this cashflow entry?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded transition">Delete</a>
+                                        </td>
+                                    <?php endif; ?>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file or add entries manually.</td>
+                                <td colspan="<?= $is_admin ? '6' : '5' ?>" class="px-4 py-6 text-center text-gray-500">No cashflow logs found. Upload your CSV file or add entries manually.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -214,3 +268,58 @@ try {
         </div>
     </div>
 </div>
+
+<!-- Edit Modal (Admin Only) -->
+<?php if ($is_admin): ?>
+<div id="editModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">✏️ Edit Cashflow Entry</h2>
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="id" id="edit_id">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="text" name="date" id="edit_date" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Particulars</label>
+                <input type="text" name="particulars" id="edit_particulars" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Amount (₱)</label>
+                <input type="number" step="any" name="amount" id="edit_amount" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Name</label>
+                <input type="text" name="name" id="edit_name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Remarks</label>
+                <select name="remarks" id="edit_remarks" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border text-sm bg-white">
+                    <option value="Cash Received">Cash Received</option>
+                    <option value="Expenses">Expenses</option>
+                </select>
+            </div>
+            <div class="flex justify-end space-x-3 pt-2">
+                <button type="button" onclick="closeEditModal()" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 text-sm font-semibold">Cancel</button>
+                <button type="submit" name="edit_entry" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 text-sm font-semibold shadow">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditModal(row) {
+    document.getElementById('edit_id').value = row.id;
+    document.getElementById('edit_date').value = row.date;
+    document.getElementById('edit_particulars').value = row.particulars;
+    document.getElementById('edit_amount').value = row.amount;
+    document.getElementById('edit_name').value = row.name || '';
+    document.getElementById('edit_remarks').value = row.remarks || 'Cash Received';
+    document.getElementById('editModal').classList.remove('hidden');
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').classList.add('hidden');
+}
+</script>
+<?php endif; ?>
