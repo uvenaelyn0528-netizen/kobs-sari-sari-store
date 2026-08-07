@@ -4,6 +4,7 @@ require_once 'db.php';
 
 $role = strtolower(trim($_SESSION['role'] ?? 'viewer'));
 $is_viewer = ($role === 'viewer');
+$is_admin = ($role === 'admin');
 
 include 'header.php';
 
@@ -11,6 +12,38 @@ $message = '';
 $message_type = '';
 $amount_per_share = 3000.00;
 $total_dividend_pool = 275419.80; 
+
+// Handle Delete Partner Share
+if ($is_admin && isset($_GET['delete_id'])) {
+    $delete_id = intval($_GET['delete_id']);
+    try {
+        $stmt = $pdo->prepare("DELETE FROM shares WHERE id = ?");
+        $stmt->execute([$delete_id]);
+        $message = "Partner share deleted successfully!";
+        $message_type = "success";
+    } catch (PDOException $e) {
+        $message = "Error deleting record: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
+
+// Handle Edit Partner Share
+if ($is_admin && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_share'])) {
+    $edit_id           = intval($_POST['edit_id'] ?? 0);
+    $partner_name      = trim($_POST['partner_name'] ?? '');
+    $shares_count      = floatval($_POST['shares_count'] ?? 0);
+    $investment_amount = $shares_count * $amount_per_share;
+
+    try {
+        $stmt = $pdo->prepare("UPDATE shares SET partner_name = ?, shares_count = ?, investment_amount = ? WHERE id = ?");
+        $stmt->execute([$partner_name, $shares_count, $investment_amount, $edit_id]);
+        $message = "Partner share updated successfully!";
+        $message_type = "success";
+    } catch (PDOException $e) {
+        $message = "Error updating record: " . $e->getMessage();
+        $message_type = "error";
+    }
+}
 
 // Handle CSV Import
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import_csv'])) {
@@ -21,19 +54,16 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
 
         if ($fileExtension === 'csv') {
             if (($handle = fopen($fileTmpPath, 'r')) !== FALSE) {
-                // Read header row to map columns dynamically
                 $header = fgetcsv($handle, 1000, ",");
                 $header = array_map(function($h) {
                     return strtolower(trim(str_replace(['# of ', '.'], ['', ''], $h)));
                 }, $header);
 
-                // Find indexes for Name and Shares
                 $nameIndex = array_search('name', $header);
                 $sharesIndex = array_search('shares', $header);
 
-                // Fallbacks if header names are exact matches or standard positions
-                if ($nameIndex === false) $nameIndex = 1; // Default to column B
-                if ($sharesIndex === false) $sharesIndex = 2; // Default to column C
+                if ($nameIndex === false) $nameIndex = 1; 
+                if ($sharesIndex === false) $sharesIndex = 2; 
 
                 $imported_count = 0;
                 while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
@@ -53,7 +83,6 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
                                 $stmt->execute([$partner_name, $shares_count, $investment_amount]);
                                 $imported_count++;
                             } catch (PDOException $e) {
-                                // Fallback for MySQL if using ON DUPLICATE KEY UPDATE instead of PostgreSQL ON CONFLICT
                                 try {
                                     $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) 
                                                            VALUES (?, ?, ?) 
@@ -208,7 +237,9 @@ foreach ($shares as $s) {
                             <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">% SHARE</th>
                             <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">DIVIDEND</th>
                             <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">TOTAL MONEY</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remarks</th>
+                            <?php if ($is_admin): ?>
+                                <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
@@ -231,12 +262,18 @@ foreach ($shares as $s) {
                                     <td class="px-3 py-3 text-center text-indigo-600 font-medium"><?= number_format($share_percentage, 2) ?>%</td>
                                     <td class="px-3 py-3 text-right text-green-700 font-bold">₱<?= number_format($dividend_val, 2) ?></td>
                                     <td class="px-3 py-3 text-right text-gray-900 font-bold bg-gray-50">₱<?= number_format($total_money, 2) ?></td>
-                                    <td class="px-3 py-3 text-gray-400 text-xs">-</td>
+                                    
+                                    <?php if ($is_admin): ?>
+                                        <td class="px-3 py-3 text-center whitespace-space space-x-2">
+                                            <button onclick="openEditModal(<?= $s['id'] ?>, '<?= htmlspecialchars($s['partner_name'], ENT_QUOTES) ?>', <?= $shares_cnt ?>)" class="text-blue-600 hover:text-blue-800 font-semibold text-xs bg-blue-50 px-2 py-1 rounded">Edit</button>
+                                            <a href="shares.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this partner?');" class="text-red-600 hover:text-red-800 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
+                                        </td>
+                                    <?php endif; ?>
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="8" class="px-4 py-6 text-center text-gray-500">No share records found. Upload a CSV file or add partners manually.</td>
+                                <td colspan="<?= $is_admin ? 8 : 7 ?>" class="px-4 py-6 text-center text-gray-500">No share records found. Upload a CSV file or add partners manually.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -245,3 +282,44 @@ foreach ($shares as $s) {
         </div>
     </div>
 </div>
+
+<!-- Edit Modal Overlay -->
+<div id="editModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">Edit Partner Share</h2>
+        <form method="POST" class="space-y-4">
+            <input type="hidden" name="edit_id" id="edit_id">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Partner Name</label>
+                <input type="text" name="partner_name" id="edit_partner_name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700"># of Shares</label>
+                <input type="number" step="any" name="shares_count" id="edit_shares_count" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+            </div>
+            <div class="flex justify-end space-x-2 mt-4">
+                <button type="button" onclick="closeEditModal()" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 font-semibold">Cancel</button>
+                <button type="submit" name="edit_share" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 font-semibold">Update Share</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditModal(id, name, shares) {
+    document.getElementById('edit_id').value = id;
+    document.getElementById('edit_partner_name').value = name;
+    document.getElementById('edit_shares_count').value = shares;
+    document.getElementById('edit_Modal').classList.remove('hidden'); // matches popup ID wrapper
+}
+// Helper fix for modal ID reference
+function openEditModal(id, name, shares) {
+    document.getElementById('edit_id').value = id;
+    document.getElementById('edit_partner_name').value = name;
+    document.getElementById('edit_shares_count').value = shares;
+    document.getElementById('editModal').classList.remove('hidden');
+}
+function closeEditModal() {
+    document.getElementById('editModal').classList.add('hidden');
+}
+</script>
