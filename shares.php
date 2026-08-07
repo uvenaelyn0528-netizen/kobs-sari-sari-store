@@ -11,7 +11,7 @@ include 'header.php';
 $message = '';
 $message_type = '';
 $amount_per_share = 3000.00;
-$total_dividend_pool = 275419.80; 
+$total_dividend_pool = 0.00; // Blank / set to 0 for future computation
 
 // Handle Delete Partner Share
 if ($is_admin && isset($_GET['delete_id'])) {
@@ -29,9 +29,9 @@ if ($is_admin && isset($_GET['delete_id'])) {
 
 // Handle Edit Partner Share
 if ($is_admin && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_share'])) {
-    $edit_id           = intval($_POST['edit_id'] ?? 0);
-    $partner_name      = trim($_POST['partner_name'] ?? '');
-    $shares_count      = floatval($_POST['shares_count'] ?? 0);
+    $edit_id             = intval($_POST['edit_id'] ?? 0);
+    $partner_name        = trim($_POST['partner_name'] ?? '');
+    $shares_count        = floatval($_POST['shares_count'] ?? 0);
     $investment_amount = $shares_count * $amount_per_share;
 
     try {
@@ -115,8 +115,8 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
 
 // Handle Single Add Partner Share Form
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_share'])) {
-    $partner_name      = trim($_POST['partner_name'] ?? '');
-    $shares_count      = floatval($_POST['shares_count'] ?? 0);
+    $partner_name        = trim($_POST['partner_name'] ?? '');
+    $shares_count        = floatval($_POST['shares_count'] ?? 0);
     $investment_amount = $shares_count * $amount_per_share;
 
     try {
@@ -160,7 +160,7 @@ foreach ($shares as $s) {
     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">🤝 KOBS COOP Shares & Dividends</h1>
-            <p class="text-xs text-gray-500 mt-1">Import CSV lists or manage shareholders directly.</p>
+            <p class="text-xs text-gray-500 mt-1">Manage shareholders and equity details.</p>
         </div>
 
         <!-- Summary Metric Cards -->
@@ -189,20 +189,6 @@ foreach ($shares as $s) {
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
         <?php if (!$is_viewer): ?>
         <div class="space-y-6">
-            <!-- CSV Import Box -->
-            <div class="bg-white p-6 rounded-xl shadow-md">
-                <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import CSV File</h2>
-                <p class="text-xs text-gray-500 mb-4">Upload your exported CSV file containing columns: `NO.`, `NAME`, `# of Shares`.</p>
-                <form method="POST" enctype="multipart/form-data" class="space-y-4">
-                    <div>
-                        <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-                    </div>
-                    <button type="submit" name="import_csv" class="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 transition font-semibold shadow">
-                        Upload & Import CSV
-                    </button>
-                </form>
-            </div>
-
             <!-- Add Single Partner Form -->
             <div class="bg-white p-6 rounded-xl shadow-md">
                 <h2 class="text-lg font-bold text-gray-800 mb-4">Add Single Partner</h2>
@@ -225,7 +211,18 @@ foreach ($shares as $s) {
 
         <!-- Main Cooperative Table -->
         <div class="<?= $is_viewer ? 'lg:col-span-4' : 'lg:col-span-3' ?> bg-white p-6 rounded-xl shadow-md">
-            <h2 class="text-lg font-bold text-gray-800 mb-4">Shareholders Directory & Dividend Computations</h2>
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+                <h2 class="text-lg font-bold text-gray-800">Shareholders Directory & Dividend Computations</h2>
+                
+                <?php if (!$is_viewer): ?>
+                <!-- Import CSV Button triggering Modal -->
+                <button type="button" onclick="openCsvModal()" class="inline-flex items-center bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2 px-3 rounded-md shadow transition">
+                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    Import CSV
+                </button>
+                <?php endif; ?>
+            </div>
+
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200 text-sm">
                     <thead class="bg-gray-50">
@@ -283,6 +280,23 @@ foreach ($shares as $s) {
     </div>
 </div>
 
+<!-- Import CSV Modal -->
+<div id="csvModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-800 mb-2">📁 Import CSV File</h2>
+        <p class="text-xs text-gray-500 mb-4">Upload your exported CSV file containing columns: `NO.`, `NAME`, `# of Shares`.</p>
+        <form method="POST" enctype="multipart/form-data" class="space-y-4">
+            <div>
+                <input type="file" name="csv_file" accept=".csv" required class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            </div>
+            <div class="flex justify-end space-x-2 mt-4">
+                <button type="button" onclick="closeCsvModal()" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 font-semibold text-xs">Cancel</button>
+                <button type="submit" name="import_csv" class="bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 transition font-semibold text-xs shadow">Upload & Import CSV</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Edit Modal Overlay -->
 <div id="editModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
     <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
@@ -306,6 +320,12 @@ foreach ($shares as $s) {
 </div>
 
 <script>
+function openCsvModal() {
+    document.getElementById('csvModal').classList.remove('hidden');
+}
+function closeCsvModal() {
+    document.getElementById('csvModal').classList.add('hidden');
+}
 function openEditModal(id, name, shares) {
     document.getElementById('edit_id').value = id;
     document.getElementById('edit_partner_name').value = name;
