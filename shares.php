@@ -223,23 +223,24 @@ foreach ($shares as $s) {
                 <?php endif; ?>
             </div>
 
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead class="bg-gray-50">
+            <!-- Scrollable Table Container -->
+            <div class="overflow-x-auto max-h-[550px] overflow-y-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200 text-sm relative">
+                    <thead class="bg-gray-100 sticky top-0 z-10 shadow-sm">
                         <tr>
-                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">NO.</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">NAME</th>
-                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase"># of Shares</th>
-                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">AMOUNT</th>
-                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">% SHARE</th>
-                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">DIVIDEND</th>
-                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">TOTAL MONEY</th>
+                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-600 uppercase bg-gray-100">NO.</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-600 uppercase bg-gray-100">NAME</th>
+                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-600 uppercase bg-gray-100"># of Shares</th>
+                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-600 uppercase bg-gray-100">AMOUNT</th>
+                            <th class="px-3 py-3 text-center text-xs font-medium text-gray-600 uppercase bg-gray-100">% SHARE</th>
+                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-600 uppercase bg-gray-100">DIVIDEND</th>
+                            <th class="px-3 py-3 text-right text-xs font-medium text-gray-600 uppercase bg-gray-100">TOTAL MONEY</th>
                             <?php if ($is_admin): ?>
-                                <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                <th class="px-3 py-3 text-center text-xs font-medium text-gray-600 uppercase bg-gray-100">Actions</th>
                             <?php endif; ?>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-200">
+                    <tbody class="divide-y divide-gray-200 bg-white">
                         <?php if (!empty($shares)): ?>
                             <?php 
                             $counter = 1;
