@@ -154,7 +154,6 @@ foreach ($cashflows as $row) {
     if ($rem === 'expenses' || $rem === 'expense') {
         $total_expenses += $amt;
     } else {
-        // Default everything else to Cash Received
         $total_received += $amt;
     }
 }
@@ -252,24 +251,24 @@ $remaining_cash = $total_received - $total_expenses;
                 </div>
             </div>
 
-            <!-- Cashflow Transaction Table -->
+            <!-- Cashflow Transaction Table with Scrollbar -->
             <div class="bg-white p-6 rounded-xl shadow-md">
                 <h2 class="text-lg font-bold text-gray-800 mb-4">Cashflow Transactions</h2>
-                <div class="overflow-x-auto">
+                <div class="max-h-[600px] overflow-y-auto pr-1">
                     <table class="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead class="bg-gray-50">
+                        <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
                             <tr>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Particulars</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remarks</th>
-                                <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase bg-gray-50">Date</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase bg-gray-50">Particulars</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase bg-gray-50">Name</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase bg-gray-50">Remarks</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase bg-gray-50">Amount</th>
                                 <?php if ($is_admin): ?>
-                                    <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                    <th class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase bg-gray-50">Actions</th>
                                 <?php endif; ?>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-200">
+                        <tbody class="divide-y divide-gray-200 bg-white">
                             <?php if (!empty($cashflows)): ?>
                                 <?php foreach ($cashflows as $row): ?>
                                     <tr class="hover:bg-gray-50 transition">
@@ -283,7 +282,7 @@ $remaining_cash = $total_received - $total_expenses;
                                         </td>
                                         <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format(floatval($row['amount'] ?? 0), 2) ?></td>
                                         <?php if ($is_admin): ?>
-                                            <td class="px-3 py-3 text-center whitespace-space space-x-2">
+                                            <td class="px-3 py-3 text-center whitespace-nowrap space-x-2">
                                                 <button onclick="openEditModal(<?= htmlspecialchars(json_encode($row)) ?>)" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded transition">Edit</button>
                                                 <a href="cashflow.php?delete_id=<?= $row['id'] ?>" onclick="return confirm('Are you sure you want to delete this cashflow entry?');" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded transition">Delete</a>
                                             </td>
