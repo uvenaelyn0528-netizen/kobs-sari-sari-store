@@ -166,8 +166,8 @@ foreach ($shares as $s) {
         <!-- Summary Metric Cards -->
         <div class="flex flex-wrap gap-3">
             <div class="bg-white px-4 py-2 rounded-lg shadow border border-gray-200 text-center">
-                <span class="block text-xs text-gray-500 uppercase font-medium">Total Capital</span>
-                <span class="text-base font-bold text-gray-800">₱<?= number_format($total_capital, 2) ?></span>
+                <span class="block text-xs text-gray-500 uppercase font-medium">Total Capital / Shares</span>
+                <span class="text-base font-bold text-gray-800">₱<?= number_format($total_capital, 2) ?> <span class="text-xs font-normal text-gray-500">(<?= $total_shares_count ?> shares)</span></span>
             </div>
             <div class="bg-white px-4 py-2 rounded-lg shadow border border-gray-200 text-center">
                 <span class="block text-xs text-gray-500 uppercase font-medium">Total Dividend Pool</span>
@@ -264,7 +264,7 @@ foreach ($shares as $s) {
                                     <td class="px-3 py-3 text-right text-gray-900 font-bold bg-gray-50">₱<?= number_format($total_money, 2) ?></td>
                                     
                                     <?php if ($is_admin): ?>
-                                        <td class="px-3 py-3 text-center whitespace-space space-x-2">
+                                        <td class="px-3 py-3 text-center whitespace-nowrap space-x-2">
                                             <button onclick="openEditModal(<?= $s['id'] ?>, '<?= htmlspecialchars($s['partner_name'], ENT_QUOTES) ?>', <?= $shares_cnt ?>)" class="text-blue-600 hover:text-blue-800 font-semibold text-xs bg-blue-50 px-2 py-1 rounded">Edit</button>
                                             <a href="shares.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this partner?');" class="text-red-600 hover:text-red-800 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
                                         </td>
@@ -306,13 +306,6 @@ foreach ($shares as $s) {
 </div>
 
 <script>
-function openEditModal(id, name, shares) {
-    document.getElementById('edit_id').value = id;
-    document.getElementById('edit_partner_name').value = name;
-    document.getElementById('edit_shares_count').value = shares;
-    document.getElementById('edit_Modal').classList.remove('hidden'); // matches popup ID wrapper
-}
-// Helper fix for modal ID reference
 function openEditModal(id, name, shares) {
     document.getElementById('edit_id').value = id;
     document.getElementById('edit_partner_name').value = name;
