@@ -21,27 +21,49 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import
 
         if ($fileExtension === 'csv') {
             if (($handle = fopen($fileTmpPath, 'r')) !== FALSE) {
-                // Skip header row if it exists
+                // Read header row to map columns dynamically
                 $header = fgetcsv($handle, 1000, ",");
-                
+                $header = array_map(function($h) {
+                    return strtolower(trim(str_replace(['# of ', '.'], ['', ''], $h)));
+                }, $header);
+
+                // Find indexes for Name and Shares
+                $nameIndex = array_search('name', $header);
+                $sharesIndex = array_search('shares', $header);
+
+                // Fallbacks if header names are exact matches or standard positions
+                if ($nameIndex === false) $nameIndex = 1; // Default to column B
+                if ($sharesIndex === false) $sharesIndex = 2; // Default to column C
+
                 $imported_count = 0;
                 while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
-                    // Assuming structure: Col 0 = NO., Col 1 = NAME, Col 2 = # of Shares, Col 3 = CAPITAL (optional)
-                    if (isset($data[1]) && trim($data[1]) !== '') {
-                        $partner_name = trim($data[1]);
-                        $shares_count = floatval($data[2] ?? 0);
-                        // Automatically compute investment amount if amount column is empty or dash (-)
-                        $investment_amount = $shares_count * $amount_per_share;
+                    if (isset($data[$nameIndex]) && trim($data[$nameIndex]) !== '') {
+                        $partner_name = trim($data[$nameIndex]);
+                        $shares_raw = $data[$sharesIndex] ?? 0;
+                        $shares_count = floatval(preg_replace('/[^0-9.]/', '', $shares_raw));
+                        
+                        if ($shares_count > 0 || trim($partner_name) !== '') {
+                            $investment_amount = $shares_count * $amount_per_share;
 
-                        // Insert into database (using ON DUPLICATE KEY UPDATE if partner name is unique)
-                        try {
-                            $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) 
-                                                   VALUES (?, ?, ?) 
-                                                   ON DUPLICATE KEY UPDATE shares_count = VALUES(shares_count), investment_amount = VALUES(investment_amount)");
-                            $stmt->execute([$partner_name, $shares_count, $investment_amount]);
-                            $imported_count++;
-                        } catch (PDOException $e) {
-                            // Skip or log error silently on individual row fail
+                            try {
+                                $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) 
+                                                       VALUES (?, ?, ?) 
+                                                       ON CONFLICT (partner_name) 
+                                                       DO UPDATE SET shares_count = EXCLUDED.shares_count, investment_amount = EXCLUDED.investment_amount");
+                                $stmt->execute([$partner_name, $shares_count, $investment_amount]);
+                                $imported_count++;
+                            } catch (PDOException $e) {
+                                // Fallback for MySQL if using ON DUPLICATE KEY UPDATE instead of PostgreSQL ON CONFLICT
+                                try {
+                                    $stmt = $pdo->prepare("INSERT INTO shares (partner_name, shares_count, investment_amount) 
+                                                           VALUES (?, ?, ?) 
+                                                           ON DUPLICATE KEY UPDATE shares_count = VALUES(shares_count), investment_amount = VALUES(investment_amount)");
+                                    $stmt->execute([$partner_name, $shares_count, $investment_amount]);
+                                    $imported_count++;
+                                } catch (PDOException $ex) {
+                                    // Skip row if error persists
+                                }
+                            }
                         }
                     }
                 }
@@ -195,7 +217,7 @@ foreach ($shares as $s) {
                             $counter = 1;
                             foreach ($shares as $s): 
                                 $shares_cnt = floatval($s['shares_count'] ?? 0);
-                                $amount_val = $shares_cnt * $amount_per_share; // Auto calculates amount using 3,000 multiplier
+                                $amount_val = $shares_cnt * $amount_per_share;
                                 
                                 $share_percentage = $total_shares_count > 0 ? ($shares_cnt / $total_shares_count) * 100 : 0;
                                 $dividend_val = ($share_percentage / 100) * $total_dividend_pool;
