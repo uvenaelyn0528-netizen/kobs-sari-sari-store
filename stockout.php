@@ -9,7 +9,7 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- DETECT COLUMNS IN 'TRANSACTIONS' TABLE ---
+// --- 1. DETECT COLUMNS IN 'TRANSACTIONS' TABLE ---
 $all_tx_cols = [];
 $insertable_tx_cols = [];
 $not_null_cols = [];
@@ -55,7 +55,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fallback column discovery
+// Fallback column discovery if information_schema fails
 if (empty($all_tx_cols)) {
     try {
         $col_stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
@@ -73,21 +73,50 @@ if (empty($all_tx_cols)) {
     } catch (Exception $e) {}
 }
 
-// Map column getters
+// --- 2. PRE-DETECT COLUMNS IN 'PRODUCTS' TABLE (PREVENTS IN-TRANSACTION FAILURES) ---
+$prod_qty_col = null;
+$prod_code_col = null;
+
+try {
+    $p_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE table_name = 'products'");
+    $p_cols = $p_cols_stmt->fetchAll(PDO::FETCH_COLUMN);
+    if (!empty($p_cols)) {
+        $p_cols_lower = array_map('strtolower', $p_cols);
+        foreach (['quantity', 'remaining_qty', 'qty', 'stock'] as $qc) {
+            if (in_array($qc, $p_cols_lower)) { $prod_qty_col = $qc; break; }
+        }
+        foreach (['product_code', 'barcode', 'item_code', 'code'] as $cc) {
+            if (in_array($cc, $p_cols_lower)) { $prod_code_col = $cc; break; }
+        }
+    }
+} catch (Exception $e) {}
+
+// Fallback column discovery for products
+if (!$prod_qty_col || !$prod_code_col) {
+    try {
+        $p_stmt = $pdo->query("SELECT * FROM products LIMIT 1");
+        for ($i = 0; $i < $p_stmt->columnCount(); $i++) {
+            $meta = $p_stmt->getColumnMeta($i);
+            if ($meta && isset($meta['name'])) {
+                $cname = strtolower($meta['name']);
+                if (!$prod_qty_col && in_array($cname, ['quantity', 'remaining_qty', 'qty', 'stock'])) $prod_qty_col = $cname;
+                if (!$prod_code_col && in_array($cname, ['product_code', 'barcode', 'item_code', 'code'])) $prod_code_col = $cname;
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+// Column matchers
 $getInsertCol = function($candidates) use ($insertable_tx_cols) {
     foreach ($candidates as $cand) {
-        if (in_array(strtolower($cand), $insertable_tx_cols)) {
-            return $cand;
-        }
+        if (in_array(strtolower($cand), $insertable_tx_cols)) return $cand;
     }
     return null;
 };
 
 $getSelectCol = function($candidates) use ($all_tx_cols) {
     foreach ($candidates as $cand) {
-        if (in_array(strtolower($cand), $all_tx_cols)) {
-            return $cand;
-        }
+        if (in_array(strtolower($cand), $all_tx_cols)) return $cand;
     }
     return null;
 };
@@ -119,9 +148,7 @@ try {
     if ($col_cust_sel) {
         $c_stmt = $pdo->query("SELECT DISTINCT $col_cust_sel FROM transactions WHERE $col_cust_sel IS NOT NULL AND $col_cust_sel != ''");
         while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
-            if (!empty($row[0])) {
-                $customer_list[] = trim($row[0]);
-            }
+            if (!empty($row[0])) $customer_list[] = trim($row[0]);
         }
     }
     $customer_list = array_values(array_unique($customer_list));
@@ -154,6 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             if ($col_unit_price_ins)   { $fields[] = $col_unit_price_ins;   $placeholders[] = ':unit_price'; }
             if ($col_buy_price_ins)    { $fields[] = $col_buy_price_ins;    $placeholders[] = ':buy_price'; }
 
+            // Include any unmapped NOT NULL columns
             foreach ($not_null_cols as $nn_col) {
                 if (!in_array($nn_col, $fields) && $nn_col !== $pk_col) {
                     $fields[] = $nn_col;
@@ -184,43 +212,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 if ($col_unit_price_ins)   $binds[':unit_price']   = $price;
                 if ($col_buy_price_ins)    $binds[':buy_price']    = $buy_price;
 
+                // Safely assign type-correct fallback values for Postgres
                 foreach ($not_null_cols as $nn_col) {
                     if ($nn_col === $pk_col) continue;
                     $p_key = ':' . $nn_col;
                     if (!array_key_exists($p_key, $binds)) {
-                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'retail') !== false) {
-                            $binds[$p_key] = $price;
-                        } elseif (strpos($nn_col, 'cost') !== false || strpos($nn_col, 'buy') !== false) {
-                            $binds[$p_key] = $buy_price;
-                        } elseif (strpos($nn_col, 'qty') !== false) {
+                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'retail') !== false || strpos($nn_col, 'cost') !== false || strpos($nn_col, 'buy') !== false || strpos($nn_col, 'total') !== false) {
+                            $binds[$p_key] = 0.00;
+                        } elseif (strpos($nn_col, 'qty') !== false || strpos($nn_col, 'quantity') !== false) {
                             $binds[$p_key] = $qty;
+                        } elseif (strpos($nn_col, 'date') !== false || strpos($nn_col, 'time') !== false || strpos($nn_col, 'created') !== false) {
+                            $binds[$p_key] = date('Y-m-d H:i:s');
                         } else {
-                            $binds[$p_key] = '';
+                            $binds[$p_key] = 'N/A';
                         }
                     }
                 }
 
                 $stmt->execute($binds);
 
-                // Deduct inventory
-                if ($tx_type !== 'Payment') {
-                    try {
-                        $deductStmt = $pdo->prepare("
-                            UPDATE products 
-                            SET quantity = quantity - :qty 
-                            WHERE product_code = :barcode OR barcode = :barcode OR item_code = :barcode
-                        ");
-                        $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
-                    } catch (Exception $ex) {
-                        try {
-                            $deductStmt = $pdo->prepare("
-                                UPDATE products 
-                                SET remaining_qty = remaining_qty - :qty 
-                                WHERE product_code = :barcode OR barcode = :barcode
-                            ");
-                            $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
-                        } catch (Exception $ex2) {}
-                    }
+                // Safely update product stock
+                if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
+                    $deductStmt = $pdo->prepare("
+                        UPDATE products 
+                        SET {$prod_qty_col} = {$prod_qty_col} - :qty 
+                        WHERE {$prod_code_col} = :barcode
+                    ");
+                    $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
                 }
             }
 
@@ -228,7 +246,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             header("Location: stockout.php?success=1");
             exit();
         } catch (Exception $e) {
-            $pdo->rollBack();
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             $error_message = "Transaction failed: " . $e->getMessage();
         }
     } else {
@@ -293,7 +313,6 @@ try {
 // --- FETCH RECENT TRANSACTIONS ---
 $transactions = [];
 try {
-    // ORDER BY 1 DESC sorts by the first column (primary key ID) safely across all SQL schemas
     $tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY 1 DESC LIMIT 50");
     if ($tx_stmt) {
         $transactions = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
