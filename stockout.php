@@ -9,11 +9,20 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- HELPER FUNCTION FOR CASE-INSENSITIVE ROW VALUE EXTRACTION ---
-function getTxVal($row, $candidates, $default = '-') {
+// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION (HISTORY LOG) ---
+function getTxVal($row, $candidates, $keywords = [], $default = '-') {
+    // 1. Try exact match on candidates
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
             if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '') {
+                return $val;
+            }
+        }
+    }
+    // 2. Fallback to keyword search on column names
+    foreach ($keywords as $kw) {
+        foreach ($row as $col_name => $val) {
+            if (strpos(strtolower($col_name), strtolower($kw)) !== false && $val !== null && trim((string)$val) !== '') {
                 return $val;
             }
         }
@@ -42,7 +51,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fallback column discovery if information_schema fails
+// Fallback column discovery if information_schema query fails
 if (empty($tx_columns)) {
     try {
         $stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
@@ -55,42 +64,87 @@ if (empty($tx_columns)) {
     } catch (Exception $e) {}
 }
 
-$tx_cols_lower = array_map('strtolower', $tx_columns);
+// Function to find ALL columns matching candidates or keywords
+function findAllMatchingColumns($candidates, $keywords, $tx_columns, $exclude_cols = []) {
+    $matched = [];
+    $tx_lower = array_map('strtolower', $tx_columns);
+    $exclude_lower = array_map('strtolower', $exclude_cols);
 
-function findColumn($candidates, $cols_lower, $original_cols, $exclude_list = []) {
-    foreach ($candidates as $cand) {
-        $idx = array_search(strtolower($cand), $cols_lower);
-        if ($idx !== false) {
-            $found_name = $original_cols[$idx];
-            if (!in_array(strtolower($found_name), $exclude_list)) {
-                return $found_name;
+    foreach ($tx_columns as $idx => $col) {
+        $col_lower = $tx_lower[$idx];
+        if (in_array($col_lower, $exclude_lower)) continue;
+
+        $is_match = false;
+        foreach ($candidates as $cand) {
+            if ($col_lower === strtolower($cand)) {
+                $is_match = true;
+                break;
             }
         }
+        if (!$is_match) {
+            foreach ($keywords as $kw) {
+                if (strpos($col_lower, strtolower($kw)) !== false) {
+                    $is_match = true;
+                    break;
+                }
+            }
+        }
+        if ($is_match) {
+            $matched[] = $col;
+        }
     }
-    return null;
+    return $matched;
 }
 
-// Map column names for display/queries
-$col_code = findColumn(['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code'], $tx_cols_lower, $tx_columns);
-$col_type = findColumn(['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], $tx_cols_lower, $tx_columns);
-$col_desc = findColumn(['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item'], $tx_cols_lower, $tx_columns);
-$col_cust = findColumn(['customer_name', 'customer', 'client_name', 'client', 'cust_name'], $tx_cols_lower, $tx_columns);
-$col_qty  = findColumn(['qty', 'quantity', 'qty_sold', 'count'], $tx_cols_lower, $tx_columns);
-$col_date = findColumn(['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp'], $tx_cols_lower, $tx_columns);
-$col_amt  = findColumn(['amount', 'total_amount', 'total', 'price', 'retail_price', 'subtotal'], $tx_cols_lower, $tx_columns);
+function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = []) {
+    $matches = findAllMatchingColumns($candidates, $keywords, $tx_columns, $exclude_cols);
+    return !empty($matches) ? $matches[0] : null;
+}
 
-// Map column names for INSERT (strictly excluding generated columns like 'total_amount')
-$col_code_ins = findColumn(['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_type_ins = findColumn(['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_desc_ins = findColumn(['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_cust_ins = findColumn(['customer_name', 'customer', 'client_name', 'client', 'cust_name'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_qty_ins  = findColumn(['qty', 'quantity', 'qty_sold', 'count'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_date_ins = findColumn(['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_amt_ins  = findColumn(['amount', 'price', 'retail_price', 'subtotal', 'total'], $tx_cols_lower, $tx_columns, $generated_cols);
+// Define field mappings across all schema variations
+$code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'product_id', 'item_id', 'p_code', 'prod_id', 'upc', 'ean'];
+$code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
-$col_retail_price_ins = findColumn(['retail_price', 'selling_price', 'price', 'unit_price'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_unit_price_ins   = findColumn(['unit_price'], $tx_cols_lower, $tx_columns, $generated_cols);
-$col_buy_price_ins    = findColumn(['buy_price', 'cost_price', 'cost', 'purchase_price'], $tx_cols_lower, $tx_columns, $generated_cols);
+$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
+$desc_keywords   = ['desc', 'name', 'detail', 'title', 'item', 'product', 'particular', 'remark'];
+
+$cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
+$cust_keywords   = ['cust', 'client', 'buyer'];
+
+$type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type'];
+$type_keywords   = ['type', 'mode', 'pay'];
+
+$qty_candidates  = ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count'];
+$qty_keywords    = ['qty', 'quant', 'count'];
+
+$date_candidates = ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date'];
+$date_keywords   = ['date', 'time', 'created'];
+
+$amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val', 'price_total'];
+$amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
+
+// Mappings for INSERT (excluding generated columns)
+$all_code_cols = findAllMatchingColumns($code_candidates, $code_keywords, $tx_columns, $generated_cols);
+$all_desc_cols = findAllMatchingColumns($desc_candidates, $desc_keywords, $tx_columns, $generated_cols);
+$all_cust_cols = findAllMatchingColumns($cust_candidates, $cust_keywords, $tx_columns, $generated_cols);
+
+$col_type_ins = findSingleColumn($type_candidates, $type_keywords, $tx_columns, $generated_cols);
+$col_qty_ins  = findSingleColumn($qty_candidates, $qty_keywords, $tx_columns, $generated_cols);
+$col_date_ins = findSingleColumn($date_candidates, $date_keywords, $tx_columns, $generated_cols);
+$col_amt_ins  = findSingleColumn($amt_candidates, $amt_keywords, $tx_columns, $generated_cols);
+
+$col_retail_price_ins = findSingleColumn(['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], $tx_columns, $generated_cols);
+$col_unit_price_ins   = findSingleColumn(['unit_price'], ['unit'], $tx_columns, $generated_cols);
+$col_buy_price_ins    = findSingleColumn(['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], $tx_columns, $generated_cols);
+
+// Mappings for SELECT / Dashboard queries
+$col_code = findSingleColumn($code_candidates, $code_keywords, $tx_columns);
+$col_desc = findSingleColumn($desc_candidates, $desc_keywords, $tx_columns);
+$col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
+$col_type = findSingleColumn($type_candidates, $type_keywords, $tx_columns);
+$col_qty  = findSingleColumn($qty_candidates, $qty_keywords, $tx_columns);
+$col_date = findSingleColumn($date_candidates, $date_keywords, $tx_columns);
+$col_amt  = findSingleColumn($amt_candidates, $amt_keywords, $tx_columns);
 
 $pk_col = $tx_columns[0] ?? 'id';
 
@@ -102,25 +156,10 @@ try {
     $p_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE lower(table_name) = 'products' AND table_schema = 'public'");
     $p_cols = $p_cols_stmt->fetchAll(PDO::FETCH_COLUMN);
     if (!empty($p_cols)) {
-        $p_cols_lower = array_map('strtolower', $p_cols);
-        $prod_qty_col = findColumn(['quantity', 'remaining_qty', 'qty', 'stock'], $p_cols_lower, $p_cols);
-        $prod_code_col = findColumn(['product_code', 'barcode', 'item_code', 'code'], $p_cols_lower, $p_cols);
+        $prod_qty_col  = findSingleColumn(['quantity', 'remaining_qty', 'qty', 'stock'], ['qty', 'stock', 'quantity'], $p_cols);
+        $prod_code_col = findSingleColumn(['product_code', 'barcode', 'item_code', 'code'], ['code', 'bar'], $p_cols);
     }
 } catch (Exception $e) {}
-
-if (!$prod_qty_col || !$prod_code_col) {
-    try {
-        $p_stmt = $pdo->query("SELECT * FROM products LIMIT 1");
-        for ($i = 0; $i < $p_stmt->columnCount(); $i++) {
-            $meta = $p_stmt->getColumnMeta($i);
-            if ($meta && isset($meta['name'])) {
-                $cname = strtolower($meta['name']);
-                if (!$prod_qty_col && in_array($cname, ['quantity', 'remaining_qty', 'qty', 'stock'])) $prod_qty_col = $meta['name'];
-                if (!$prod_code_col && in_array($cname, ['product_code', 'barcode', 'item_code', 'code'])) $prod_code_col = $meta['name'];
-            }
-        }
-    } catch (Exception $e) {}
-}
 
 // --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
 $customer_list = [];
@@ -156,18 +195,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 $desc      = !empty($item['name']) ? $item['name'] : 'Product Item';
 
                 $insert_data = [];
-                if ($col_code_ins)         $insert_data[$col_code_ins]         = $barcode;
+
+                // Populate ALL detected code/barcode columns
+                foreach ($all_code_cols as $c_col) {
+                    $insert_data[$c_col] = $barcode;
+                }
+
+                // Populate ALL detected description/product name columns
+                foreach ($all_desc_cols as $d_col) {
+                    $insert_data[$d_col] = $desc;
+                }
+
+                // Populate ALL detected customer columns
+                foreach ($all_cust_cols as $cu_col) {
+                    $insert_data[$cu_col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
+                }
+
                 if ($col_date_ins)         $insert_data[$col_date_ins]         = $tx_date;
                 if ($col_qty_ins)          $insert_data[$col_qty_ins]          = $qty;
                 if ($col_type_ins)         $insert_data[$col_type_ins]         = $tx_type;
-                if ($col_cust_ins)         $insert_data[$col_cust_ins]         = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
-                if ($col_desc_ins)         $insert_data[$col_desc_ins]         = $desc;
                 if ($col_amt_ins)          $insert_data[$col_amt_ins]          = $amount;
                 if ($col_retail_price_ins) $insert_data[$col_retail_price_ins] = $price;
                 if ($col_unit_price_ins)   $insert_data[$col_unit_price_ins]   = $price;
                 if ($col_buy_price_ins)    $insert_data[$col_buy_price_ins]    = $buy_price;
 
-                // Handle unmapped non-nullable columns safely
+                // Safely fill non-nullable columns missing default values
                 try {
                     $nn_stmt = $pdo->query("
                         SELECT column_name, data_type, is_generated 
@@ -193,7 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 } catch (Exception $e) {}
 
-                // Remove any generated columns from array before INSERT
+                // Strictly strip any generated columns before INSERT
                 foreach ($generated_cols as $gcol) {
                     foreach ($insert_data as $ik => $iv) {
                         if (strtolower($ik) === $gcol) {
@@ -202,7 +254,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Build & execute INSERT
+                // Construct & execute INSERT query
                 $fields = array_keys($insert_data);
                 $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
 
@@ -215,7 +267,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct product stock
+                // Deduct stock from products table
                 if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -274,15 +326,15 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
+// --- FETCH PRODUCT LIST FOR BARCODE SCANNER LOOKUP ---
 $products_map = [];
 try {
     $prod_stmt = $pdo->query("SELECT * FROM products");
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $code = getTxVal($p, ['product_code', 'barcode', 'item_code', 'code'], null);
-        $name = getTxVal($p, ['product_name', 'item_name', 'description', 'name'], 'Product Item');
-        $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], 0);
-        $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], 0);
+        $code = getTxVal($p, $code_candidates, $code_keywords, null);
+        $name = getTxVal($p, $desc_candidates, $desc_keywords, 'Product Item');
+        $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
+        $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], 0);
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
@@ -723,13 +775,13 @@ try {
                     <?php if (!empty($transactions)): ?>
                         <?php foreach ($transactions as $tx): ?>
                             <?php 
-                                $t_code = getTxVal($tx, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code']);
-                                $t_date = getTxVal($tx, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp']);
-                                $t_qty  = getTxVal($tx, ['qty', 'quantity', 'qty_sold', 'count']);
-                                $t_type = getTxVal($tx, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], 'Cash');
-                                $t_cust = getTxVal($tx, ['customer_name', 'customer', 'client_name', 'client', 'cust_name']);
-                                $t_desc = getTxVal($tx, ['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item']);
-                                $t_amt  = getTxVal($tx, ['total_amount', 'amount', 'total', 'price', 'retail_price', 'subtotal'], 0);
+                                $t_code = getTxVal($tx, $code_candidates, $code_keywords);
+                                $t_date = getTxVal($tx, $date_candidates, $date_keywords);
+                                $t_qty  = getTxVal($tx, $qty_candidates, $qty_keywords);
+                                $t_type = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
+                                $t_cust = getTxVal($tx, $cust_candidates, $cust_keywords);
+                                $t_desc = getTxVal($tx, $desc_candidates, $desc_keywords);
+                                $t_amt  = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
                                 $row_id = $tx[$pk_col] ?? reset($tx);
                             ?>
                             <tr>
