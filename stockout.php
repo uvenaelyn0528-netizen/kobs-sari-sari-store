@@ -1,640 +1,419 @@
 <?php
-// Enable error reporting
+// Force error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 session_start();
-require_once 'db.php';
 
-$today = date('Y-m-d');
-
-// --- HANDLE BATCH TRANSACTION SUBMISSION ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
-    $tx_type = $_POST['tx_type'] ?? 'Cash';
-    $customer_name = $_POST['customer_name'] ?? null;
-    $tx_date = $_POST['tx_date'] ?? $today;
-    $items_raw = $_POST['items_payload'] ?? '[]';
-    $items = json_decode($items_raw, true);
-
-    if (!empty($items) && is_array($items)) {
-        try {
-            $pdo->beginTransaction();
-
-            foreach ($items as $item) {
-                $barcode = trim($item['code']);
-                $qty = (int)$item['qty'];
-                $price = (float)$item['price'];
-                $amount = $qty * $price;
-                $desc = $item['name'] ?? 'Product Item';
-
-                // 1. Insert into transactions table
-                $stmt = $pdo->prepare("
-                    INSERT INTO transactions (code, transaction_date, qty, transaction_type, customer_name, description, amount)
-                    VALUES (:code, :tdate, :qty, :ttype, :cname, :desc, :amount)
-                ");
-                $stmt->execute([
-                    ':code' => $barcode,
-                    ':tdate' => $tx_date,
-                    ':qty' => $qty,
-                    ':ttype' => $tx_type,
-                    ':cname' => ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null,
-                    ':desc' => $desc,
-                    ':amount' => $amount
-                ]);
-
-                // 2. Deduct inventory quantity (if not a pure payment)
-                if ($tx_type !== 'Payment') {
-                    $deductStmt = $pdo->prepare("UPDATE products SET quantity = quantity - :qty WHERE barcode = :barcode OR item_code = :barcode");
-                    $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
-                }
-            }
-
-            $pdo->commit();
-            header("Location: stockout.php?success=1");
-            exit();
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            $error_message = "Transaction failed: " . $e->getMessage();
-        }
-    } else {
-        $error_message = "No items scanned in the transaction cart.";
-    }
-}
-
-// --- HANDLE DELETION ---
-if (isset($_GET['delete_id'])) {
-    $delete_id = (int)$_GET['delete_id'];
-    $del = $pdo->prepare("DELETE FROM transactions WHERE id = ?");
-    $del->execute([$delete_id]);
-    header("Location: stockout.php");
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
     exit();
 }
 
-// --- FETCH DASHBOARD TOTALS ---
-$total_cash_today = 0;
-$payment_today = 0;
-$cash_sales_today = 0;
-$total_credit = 0;
+require_once 'db.php';
 
-try {
-    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Cash'");
-    $stmt->execute([$today]);
-    $cash_sales_today = (float)$stmt->fetchColumn();
-
-    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Payment'");
-    $stmt->execute([$today]);
-    $payment_today = (float)$stmt->fetchColumn();
-
-    $total_cash_today = $cash_sales_today + $payment_today;
-
-    $stmt = $pdo->query("SELECT SUM(amount) FROM transactions WHERE transaction_type = 'Credit'");
-    $total_credit = (float)$stmt->fetchColumn();
-} catch (Exception $e) {}
-
-// --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
-$products_map = [];
-try {
-    $prod_stmt = $pdo->query("SELECT barcode, item_code, item_name, selling_price FROM products");
-    while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $key = !empty($p['barcode']) ? $p['barcode'] : $p['item_code'];
-        $products_map[$key] = [
-            'name' => $p['item_name'],
-            'price' => (float)$p['selling_price']
-        ];
+// Handle deletion if delete_id is passed in URL
+if (isset($_GET['delete_id'])) {
+    $delete_id = intval($_GET['delete_id']);
+    try {
+        $stmt = $pdo->prepare("DELETE FROM transactions WHERE id = ?");
+        $stmt->execute([$delete_id]);
+        header("Location: stockout.php?msg=deleted");
+        exit();
+    } catch (Exception $e) {
+        $error_msg = "Error deleting transaction: " . $e->getMessage();
     }
-} catch (Exception $e) {}
+}
 
-// --- FETCH RECENT TRANSACTIONS ---
-$transactions = [];
-try {
-    $tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY id DESC LIMIT 50");
-    $transactions = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+// Fetch totals for summary cards (Today's metrics)
+$today = date('Y-m-d');
+
+// 1. Cash Sales Today
+$stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE transaction_type = 'Cash' AND DATE(transaction_date) = ?");
+$stmt->execute([$today]);
+$cash_sales_today = (float)$stmt->fetchColumn();
+
+// 2. Payments Today
+$stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE transaction_type = 'Payment' AND DATE(transaction_date) = ?");
+$stmt->execute([$today]);
+$payment_today = (float)$stmt->fetchColumn();
+
+// 3. Cash on Hand Today
+$total_cash_on_hand = $cash_sales_today + $payment_today;
+
+// 4. Total Credit Accumulation
+$stmt = $pdo->query("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE transaction_type = 'Credit'");
+$credit_accumulation = (float)$stmt->fetchColumn();
+
+// Fetch Transaction History Log
+$stmt = $pdo->query("SELECT * FROM transactions ORDER BY id DESC LIMIT 50");
+$transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KOBS COOP - Stock Out & POS</title>
+    <title>Stockout / Transactions Management</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        :root {
-            --primary-blue: #4f46e5;
-            --primary-hover: #4338ca;
-            --card-border: #e2e8f0;
-            --text-dark: #1e293b;
-            --text-muted: #64748b;
-        }
-
         body {
+            background-color: #f4f6f9;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f1f5f9;
-            margin: 0;
-            padding: 20px;
-            color: var(--text-dark);
         }
-
-        /* --- STAT SUMMARY CARDS --- */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
         .stat-card {
-            background: #ffffff;
+            border: none;
             border-radius: 12px;
-            padding: 16px 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            border-top: 5px solid transparent;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            background: #fff;
+            padding: 20px;
+            border-left: 5px solid #ccc;
         }
+        .stat-card.stat-cash-hand { border-left-color: #f39c12; }
+        .stat-card.stat-payment { border-left-color: #27ae60; }
+        .stat-card.stat-sales { border-left-color: #2980b9; }
+        .stat-card.stat-credit { border-left-color: #e67e22; }
 
-        .stat-card.yellow { border-top-color: #eab308; }
-        .stat-card.green { border-top-color: #22c55e; }
-        .stat-card.blue { border-top-color: #3b82f6; }
-        .stat-card.orange { border-top-color: #f97316; }
-
-        .stat-card .title {
+        .stat-title {
             font-size: 11px;
             font-weight: 700;
+            color: #7f8c8d;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: var(--text-muted);
-            margin-bottom: 6px;
         }
-
-        .stat-card .amount {
+        .stat-amount {
             font-size: 24px;
             font-weight: 800;
+            margin-top: 5px;
         }
-
-        .stat-card.yellow .amount { color: #854d0e; }
-        .stat-card.green .amount { color: #15803d; }
-        .stat-card.blue .amount { color: #1d4ed8; }
-        .stat-card.orange .amount { color: #c2410c; }
-
-        /* --- MAIN SPLIT CONTAINER --- */
-        .main-container {
-            display: grid;
-            grid-template-columns: 420px 1fr;
-            gap: 20px;
-            align-items: start;
-        }
-
-        .panel-card {
-            background: #ffffff;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
-            border: 1px solid var(--card-border);
-        }
-
-        .panel-title {
-            font-size: 18px;
-            font-weight: 700;
-            margin: 0 0 18px 0;
-            color: var(--text-dark);
-        }
-
-        /* --- FORM STYLING --- */
-        .form-group {
-            margin-bottom: 14px;
-        }
-
-        .form-group label {
-            display: block;
-            font-size: 12px;
-            font-weight: 600;
-            color: #475569;
-            margin-bottom: 6px;
-        }
-
-        .form-control {
-            width: 100%;
-            padding: 9px 12px;
-            border: 1.5px solid #cbd5e1;
-            border-radius: 8px;
-            font-size: 13px;
-            box-sizing: border-box;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .form-control:focus {
-            border-color: var(--primary-blue);
-        }
-
-        .scan-row {
-            display: grid;
-            grid-template-columns: 1fr 80px 45px;
-            gap: 8px;
-            align-items: end;
-        }
-
-        .add-btn {
-            background-color: var(--primary-blue);
-            color: white;
-            border: none;
-            height: 38px;
-            border-radius: 8px;
-            font-weight: bold;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        .add-btn:hover {
-            background-color: var(--primary-hover);
-        }
-
-        /* --- STAGED ITEMS TABLE (MULTI-ITEM CART) --- */
-        .cart-box {
-            margin: 15px 0;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            background: #f8fafc;
+        .cart-table-container {
             max-height: 220px;
             overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
         }
-
-        .cart-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-        }
-
-        .cart-table th {
-            background: #e2e8f0;
-            padding: 8px 10px;
-            text-align: left;
-            font-weight: 700;
-            font-size: 11px;
-            color: #475569;
-        }
-
-        .cart-table td {
-            padding: 8px 10px;
-            border-bottom: 1px solid #e2e8f0;
-            background: white;
-        }
-
-        .cart-delete-btn {
-            background: #fee2e2;
-            color: #ef4444;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            padding: 2px 6px;
-        }
-
-        /* --- SUMMARY & ACTION --- */
-        .cart-summary {
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
-            border-radius: 8px;
-            padding: 12px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-
-        .cart-summary .label {
-            font-size: 13px;
-            font-weight: 600;
-            color: #1e40af;
-        }
-
-        .cart-summary .total-value {
-            font-size: 20px;
-            font-weight: 800;
-            color: #1e3a8a;
-        }
-
-        .process-btn {
-            width: 100%;
-            background-color: #4f46e5;
-            color: white;
-            border: none;
-            padding: 12px;
-            border-radius: 8px;
-            font-weight: 700;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-
-        .process-btn:hover {
-            background-color: #4338ca;
-        }
-
-        /* --- TRANSACTION HISTORY TABLE --- */
-        .history-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            margin-top: 10px;
-        }
-
-        .history-table th {
-            background-color: #fef9c3;
-            color: #713f12;
-            text-align: left;
-            padding: 10px 12px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .history-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #f1f5f9;
-        }
-
-        .badge-type {
-            background-color: #dcfce7;
-            color: #15803d;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        .action-del {
-            color: #ef4444;
-            text-decoration: none;
-            font-size: 11px;
-            font-weight: 600;
-        }
+        .badge-payment { background-color: #d4edda; color: #155724; }
+        .badge-cash { background-color: #cce5ff; color: #004085; }
+        .badge-credit { background-color: #fff3cd; color: #856404; }
     </style>
 </head>
-<body>
+<body class="p-3 p-md-4">
 
-    <!-- TOP TOTAL SUMMARY CARDS -->
-    <div class="stats-grid">
-        <div class="stat-card yellow">
-            <div class="title">Total Cash On Hand (Today)</div>
-            <div class="amount">₱<?php echo number_format($total_cash_today, 2); ?></div>
+<div class="container-fluid">
+
+    <!-- TOP NAVIGATION BAR WITH BACK BUTTON -->
+    <div class="d-flex align-items-center justify-content-between mb-4 pb-2 border-bottom">
+        <div class="d-flex align-items-center gap-3">
+            <a href="index.php" class="btn btn-outline-secondary btn-sm fw-bold">
+                &larr; Back to Dashboard
+            </a>
+            <h4 class="fw-bold text-dark mb-0">Stockout & Transactions Management</h4>
         </div>
-        <div class="stat-card green">
-            <div class="title">Payment For Today</div>
-            <div class="amount">₱<?php echo number_format($payment_today, 2); ?></div>
+        <div>
+            <button type="button" onclick="history.back()" class="btn btn-light btn-sm text-muted">
+                &larr; Go Back
+            </button>
         </div>
-        <div class="stat-card blue">
-            <div class="title">Cash Sales (Today)</div>
-            <div class="amount">₱<?php echo number_format($cash_sales_today, 2); ?></div>
+    </div>
+    
+    <!-- TOP SUMMARY CARDS -->
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-card stat-cash-hand">
+                <div class="stat-title">TOTAL CASH ON HAND (TODAY)</div>
+                <div class="stat-amount text-dark">₱<?php echo number_format($total_cash_on_hand, 2); ?></div>
+            </div>
         </div>
-        <div class="stat-card orange">
-            <div class="title">Total Credit Accumulation</div>
-            <div class="amount">₱<?php echo number_format($total_credit, 2); ?></div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-card stat-payment">
+                <div class="stat-title">PAYMENT FOR TODAY</div>
+                <div class="stat-amount text-success">₱<?php echo number_format($payment_today, 2); ?></div>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-card stat-sales">
+                <div class="stat-title">CASH SALES (TODAY)</div>
+                <div class="stat-amount text-primary">₱<?php echo number_format($cash_sales_today, 2); ?></div>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-card stat-credit">
+                <div class="stat-title">TOTAL CREDIT ACCUMULATION (CREDIT + BALANCE)</div>
+                <div class="stat-amount text-danger">₱<?php echo number_format($credit_accumulation, 2); ?></div>
+            </div>
         </div>
     </div>
 
-    <!-- MAIN TWO-COLUMN WORKSPACE -->
-    <div class="main-container">
+    <!-- MAIN TWO-COLUMN LAYOUT -->
+    <div class="row g-4">
         
-        <!-- LEFT: MULTI-ITEM SCANNER & TRANSACTION BUILDER -->
-        <div class="panel-card">
-            <h2 class="panel-title">Record Transaction</h2>
-            
-            <form id="transactionForm" method="POST" action="stockout.php">
-                <input type="hidden" name="process_batch_transaction" value="1">
-                <input type="hidden" name="items_payload" id="items_payload" value="[]">
-
-                <div class="form-group">
-                    <label>Transaction Type</label>
-                    <select name="tx_type" id="tx_type" class="form-control" onchange="toggleCustomerField()">
-                        <option value="Cash">Cash</option>
-                        <option value="Credit">Credit</option>
-                        <option value="Payment">Payment</option>
-                    </select>
+        <!-- LEFT COLUMN: RECORD TRANSACTION FORM -->
+        <div class="col-12 col-lg-5 col-xl-4">
+            <div class="card border-0 shadow-sm rounded-3 p-3 p-md-4 bg-white">
+                
+                <!-- HEADER WITH BACK BUTTON -->
+                <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom">
+                    <h5 class="fw-bold text-dark mb-0">Record Transaction</h5>
+                    <a href="index.php" class="btn btn-outline-secondary btn-sm fw-semibold">
+                        &larr; Back
+                    </a>
                 </div>
 
-                <div class="form-group" id="customer_group" style="display: none;">
-                    <label>Customer Name</label>
-                    <input type="text" name="customer_name" class="form-control" placeholder="Enter customer name">
-                </div>
+                <?php if (isset($error_msg)): ?>
+                    <div class="alert alert-danger py-2 small"><?php echo htmlspecialchars($error_msg); ?></div>
+                <?php endif; ?>
 
-                <!-- SCAN BARCODE / CODE ROW -->
-                <div class="form-group">
-                    <label>Product Barcode / Code</label>
-                    <div class="scan-row">
-                        <input type="text" id="barcode_input" class="form-control" placeholder="Scan barcode or enter code" autofocus autocomplete="off">
-                        <div>
-                            <input type="number" id="qty_input" class="form-control" value="1" min="1">
-                        </div>
-                        <button type="button" class="add-btn" onclick="addItemFromScan()" title="Add to transaction">+</button>
+                <form id="transactionForm" action="process_transaction.php" method="POST">
+                    <!-- Transaction Type -->
+                    <div class="mb-2">
+                        <label class="form-label fw-bold text-muted small mb-1">Transaction Type</label>
+                        <select name="transaction_type" id="transaction_type" class="form-select form-select-sm" required>
+                            <option value="Cash">Cash</option>
+                            <option value="Credit">Credit</option>
+                        </select>
                     </div>
+
+                    <!-- Customer Name (Hidden unless Credit is selected) -->
+                    <div class="mb-2" id="customer_name_group" style="display: none;">
+                        <label class="form-label fw-bold text-muted small mb-1">Customer Name</label>
+                        <input type="text" name="customer_name" class="form-control form-control-sm" placeholder="Enter customer name">
+                    </div>
+
+                    <!-- Date -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-muted small mb-1">Date</label>
+                        <input type="date" name="transaction_date" class="form-control form-control-sm" value="<?php echo date('Y-m-d'); ?>" required>
+                    </div>
+
+                    <hr class="my-3">
+
+                    <!-- Multi-Item Barcode Scanning Area -->
+                    <div class="row g-2 mb-2">
+                        <div class="col-8">
+                            <label class="form-label fw-bold text-muted small mb-1">Product Barcode / Code</label>
+                            <input type="text" id="barcode_input" class="form-control form-control-sm" placeholder="Scan barcode or type code" autofocus>
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label fw-bold text-muted small mb-1">Qty</label>
+                            <input type="number" id="qty_input" class="form-control form-control-sm" value="1" min="1">
+                        </div>
+                        <div class="col-12 mt-2">
+                            <button type="button" id="btn_add_item" class="btn btn-secondary btn-sm w-100 fw-bold">
+                                + Add Item to List
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Scanned Items Table / Cart -->
+                    <div class="cart-table-container mb-3">
+                        <table class="table table-sm table-hover mb-0 align-middle">
+                            <thead class="bg-light sticky-top">
+                                <tr class="small text-muted">
+                                    <th>Item</th>
+                                    <th style="width: 45px;" class="text-center">Qty</th>
+                                    <th style="width: 65px;">Price</th>
+                                    <th style="width: 75px;">Subtotal</th>
+                                    <th style="width: 30px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="cart_tbody">
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted small py-3">No items added yet. Scan a barcode above.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Total Display -->
+                    <div class="d-flex justify-content-between align-items-center bg-light p-3 rounded mb-3 border">
+                        <span class="fw-bold text-uppercase text-muted small">Total Amount:</span>
+                        <span class="h4 fw-bold text-primary mb-0" id="grand_total_display">₱0.00</span>
+                    </div>
+
+                    <!-- Hidden Cart Data Input -->
+                    <input type="hidden" name="cart_data" id="cart_data">
+
+                    <!-- Submit Process Button -->
+                    <button type="submit" id="btn_process" class="btn btn-primary w-100 py-2 fw-bold" disabled style="background-color: #534bae; border: none;">
+                        Process Transaction
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- RIGHT COLUMN: TRANSACTION HISTORY LOG -->
+        <div class="col-12 col-lg-7 col-xl-8">
+            <div class="card border-0 shadow-sm rounded-3 p-3 p-md-4 bg-white">
+                
+                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center mb-3 gap-2">
+                    <h5 class="fw-bold text-dark mb-0">Transaction History Log</h5>
+                    <input type="text" id="search_input" class="form-control form-control-sm style-search" style="max-width: 250px;" placeholder="Search transactions...">
                 </div>
 
-                <!-- SCANNED ITEMS CART LIST -->
-                <div class="cart-box">
-                    <table class="cart-table">
-                        <thead>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="transactions_table">
+                        <thead class="table-light small">
                             <tr>
-                                <th>Item / Code</th>
-                                <th style="width: 40px;">Qty</th>
-                                <th style="width: 65px;">Price</th>
-                                <th style="width: 75px;">Subtotal</th>
-                                <th style="width: 25px;"></th>
+                                <th>CODE</th>
+                                <th>DATE</th>
+                                <th>QTY</th>
+                                <th>TYPE</th>
+                                <th>CUSTOMER NAME</th>
+                                <th>DESCRIPTION</th>
+                                <th>AMOUNT</th>
+                                <th>ACTIONS</th>
                             </tr>
                         </thead>
-                        <tbody id="cart_body">
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td>
-                            </tr>
+                        <tbody class="small">
+                            <?php if (empty($transactions)): ?>
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted py-4">No transactions recorded yet.</td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($transactions as $row): ?>
+                                    <tr>
+                                        <td><?php echo htmlspecialchars($row['product_code'] ?? '-'); ?></td>
+                                        <td><?php echo htmlspecialchars($row['transaction_date'] ?? $row['created_at'] ?? '-'); ?></td>
+                                        <td><?php echo htmlspecialchars($row['qty'] ?? '-'); ?></td>
+                                        <td>
+                                            <?php 
+                                                $type = $row['transaction_type'] ?? 'Cash';
+                                                $badgeClass = ($type === 'Payment') ? 'badge-payment' : (($type === 'Credit') ? 'badge-credit' : 'badge-cash');
+                                            ?>
+                                            <span class="badge <?php echo $badgeClass; ?>"><?php echo htmlspecialchars($type); ?></span>
+                                        </td>
+                                        <td><?php echo htmlspecialchars($row['customer_name'] ?? '-'); ?></td>
+                                        <td><?php echo htmlspecialchars($row['description'] ?? 'Stockout / Sale'); ?></td>
+                                        <td class="fw-bold">₱<?php echo number_format($row['amount'] ?? 0, 2); ?></td>
+                                        <td>
+                                            <a href="edit_transaction.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-light text-primary py-0 px-2 me-1">Edit</a>
+                                            <a href="stockout.php?delete_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-light text-danger py-0 px-2" onclick="return confirm('Delete this transaction log?')">Delete</a>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
                         </tbody>
                     </table>
                 </div>
 
-                <!-- COMPUTED TRANSACTION TOTAL -->
-                <div class="cart-summary">
-                    <span class="label">Total Amount:</span>
-                    <span class="total-value" id="grand_total_display">₱0.00</span>
-                </div>
-
-                <div class="form-group">
-                    <label>Date</label>
-                    <input type="date" name="tx_date" class="form-control" value="<?php echo $today; ?>">
-                </div>
-
-                <button type="submit" class="process-btn" onclick="return validateBeforeSubmit()">Process Transaction</button>
-            </form>
-        </div>
-
-        <!-- RIGHT: TRANSACTION HISTORY LOG -->
-        <div class="panel-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2 class="panel-title" style="margin: 0;">Transaction History Log</h2>
-                <input type="text" placeholder="Search transactions..." class="form-control" style="width: 220px;" onkeyup="filterHistory(this.value)">
             </div>
-
-            <table class="history-table" id="history_table">
-                <thead>
-                    <tr>
-                        <th>CODE</th>
-                        <th>DATE</th>
-                        <th>QTY</th>
-                        <th>TYPE</th>
-                        <th>CUSTOMER NAME</th>
-                        <th>DESCRIPTION</th>
-                        <th>AMOUNT</th>
-                        <th>ACTIONS</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (!empty($transactions)): ?>
-                        <?php foreach ($transactions as $tx): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($tx['code'] ?? '-'); ?></td>
-                                <td><?php echo htmlspecialchars($tx['transaction_date']); ?></td>
-                                <td><?php echo htmlspecialchars($tx['qty'] ?? '-'); ?></td>
-                                <td><span class="badge-type"><?php echo htmlspecialchars($tx['transaction_type']); ?></span></td>
-                                <td><em><?php echo htmlspecialchars($tx['customer_name'] ?? '-'); ?></em></td>
-                                <td><?php echo htmlspecialchars($tx['description'] ?? ''); ?></td>
-                                <td><strong>₱<?php echo number_format($tx['amount'], 2); ?></strong></td>
-                                <td>
-                                    <a href="stockout.php?delete_id=<?php echo $tx['id']; ?>" class="action-del" onclick="return confirm('Delete this record?')">Delete</a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transactions recorded today.</td>
-                        </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
         </div>
 
     </div>
+</div>
 
-    <!-- CLIENT-SIDE MULTI-SCAN & CART ENGINE -->
-    <script>
-        // Database product cache for instant offline matching
-        const productDatabase = <?php echo json_encode($products_map); ?>;
-        
-        let cartItems = [];
+<!-- JavaScript Logic -->
+<script>
+let cart = [];
 
-        const barcodeInput = document.getElementById('barcode_input');
-        const qtyInput = document.getElementById('qty_input');
-        const cartBody = document.getElementById('cart_body');
-        const grandTotalDisplay = document.getElementById('grand_total_display');
-        const itemsPayload = document.getElementById('items_payload');
+// Toggle Customer Name field based on Transaction Type selection
+document.getElementById('transaction_type').addEventListener('change', function() {
+    const custGroup = document.getElementById('customer_name_group');
+    custGroup.style.display = (this.value === 'Credit') ? 'block' : 'none';
+});
 
-        // Allow pressing Enter in the barcode field to add immediately
-        barcodeInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                addItemFromScan();
-            }
-        });
+// Barcode input Enter key press listener
+document.getElementById('barcode_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        addItemToCart();
+    }
+});
 
-        function addItemFromScan() {
-            const code = barcodeInput.value.trim();
-            const qty = parseInt(qtyInput.value) || 1;
+document.getElementById('btn_add_item').addEventListener('click', addItemToCart);
 
-            if (!code) return;
+async function addItemToCart() {
+    const barcodeInput = document.getElementById('barcode_input');
+    const qtyInput = document.getElementById('qty_input');
+    const barcode = barcodeInput.value.trim();
+    const qty = parseInt(qtyInput.value) || 1;
 
-            // Lookup product info or default to generic item
-            let name = "Scanned Item (" + code + ")";
-            let price = 0.00;
+    if (!barcode) return;
 
-            if (productDatabase[code]) {
-                name = productDatabase[code].name;
-                price = parseFloat(productDatabase[code].price) || 0.00;
-            } else {
-                // If price is unknown, prompt cashier or default
-                const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter price per unit:`, "0");
-                if (manualPrice === null) return;
-                price = parseFloat(manualPrice) || 0;
-            }
+    try {
+        const response = await fetch(`get_product.php?code=${encodeURIComponent(barcode)}`);
+        const data = await response.json();
 
-            // Check if item already exists in current transaction cart
-            const existingIndex = cartItems.findIndex(item => item.code === code);
+        if (data.success) {
+            const existingIndex = cart.findIndex(item => item.code === data.product.code);
+            
             if (existingIndex > -1) {
-                cartItems[existingIndex].qty += qty;
+                cart[existingIndex].qty += qty;
+                cart[existingIndex].subtotal = cart[existingIndex].qty * cart[existingIndex].price;
             } else {
-                cartItems.push({
-                    code: code,
-                    name: name,
-                    price: price,
-                    qty: qty
+                cart.push({
+                    code: data.product.code,
+                    name: data.product.name,
+                    price: parseFloat(data.product.price),
+                    qty: qty,
+                    subtotal: qty * parseFloat(data.product.price)
                 });
             }
 
             renderCart();
-
-            // Reset inputs for next consecutive scan
             barcodeInput.value = '';
-            qtyInput.value = '1';
+            qtyInput.value = 1;
             barcodeInput.focus();
+        } else {
+            alert(data.message || 'Product code not found!');
         }
+    } catch (error) {
+        console.error('Error fetching product:', error);
+        alert('Server error while retrieving product code.');
+    }
+}
 
-        function removeCartItem(index) {
-            cartItems.splice(index, 1);
-            renderCart();
-        }
+function renderCart() {
+    const tbody = document.getElementById('cart_tbody');
+    const processBtn = document.getElementById('btn_process');
+    tbody.innerHTML = '';
+    let grandTotal = 0;
 
-        function renderCart() {
-            if (cartItems.length === 0) {
-                cartBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td></tr>`;
-                grandTotalDisplay.innerText = "₱0.00";
-                itemsPayload.value = "[]";
-                return;
-            }
+    if (cart.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted small py-3">No items added yet. Scan a barcode above.</td></tr>`;
+        processBtn.disabled = true;
+        document.getElementById('grand_total_display').innerText = '₱0.00';
+        document.getElementById('cart_data').value = '';
+        return;
+    }
 
-            let html = '';
-            let grandTotal = 0;
+    cart.forEach((item, index) => {
+        grandTotal += item.subtotal;
+        tbody.innerHTML += `
+            <tr class="small">
+                <td><strong>${item.name}</strong><br><span class="text-muted" style="font-size:10px;">${item.code}</span></td>
+                <td class="text-center">${item.qty}</td>
+                <td>₱${item.price.toFixed(2)}</td>
+                <td class="fw-bold">₱${item.subtotal.toFixed(2)}</td>
+                <td class="text-center">
+                    <button type="button" class="btn btn-sm btn-outline-danger border-0 py-0 px-1" onclick="removeItem(${index})">&times;</button>
+                </td>
+            </tr>
+        `;
+    });
 
-            cartItems.forEach((item, index) => {
-                const subtotal = item.qty * item.price;
-                grandTotal += subtotal;
+    document.getElementById('grand_total_display').innerText = `₱${grandTotal.toFixed(2)}`;
+    document.getElementById('cart_data').value = JSON.stringify(cart);
+    processBtn.disabled = false;
+}
 
-                html += `
-                    <tr>
-                        <td>
-                            <strong>${item.code}</strong><br>
-                            <small style="color: #64748b;">${item.name}</small>
-                        </td>
-                        <td>${item.qty}</td>
-                        <td>₱${item.price.toFixed(2)}</td>
-                        <td><strong>₱${subtotal.toFixed(2)}</strong></td>
-                        <td>
-                            <button type="button" class="cart-delete-btn" onclick="removeCartItem(${index})">✕</button>
-                        </td>
-                    </tr>
-                `;
-            });
+function removeItem(index) {
+    cart.splice(index, 1);
+    renderCart();
+}
 
-            cartBody.innerHTML = html;
-            grandTotalDisplay.innerText = "₱" + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            itemsPayload.value = JSON.stringify(cartItems);
-        }
+// Live Search for Transaction History Table
+document.getElementById('search_input').addEventListener('keyup', function() {
+    const filter = this.value.toLowerCase();
+    const rows = document.querySelectorAll('#transactions_table tbody tr');
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(filter) ? '' : 'none';
+    });
+});
+</script>
 
-        function toggleCustomerField() {
-            const txType = document.getElementById('tx_type').value;
-            const customerGroup = document.getElementById('customer_group');
-            customerGroup.style.display = (txType === 'Credit' || txType === 'Payment') ? 'block' : 'none';
-        }
-
-        function validateBeforeSubmit() {
-            if (cartItems.length === 0) {
-                alert("Please scan at least one item before processing the transaction.");
-                return false;
-            }
-            return true;
-        }
-
-        function filterHistory(query) {
-            const filter = query.toLowerCase();
-            const rows = document.querySelectorAll("#history_table tbody tr");
-            rows.forEach(row => {
-                const text = row.innerText.toLowerCase();
-                row.style.display = text.includes(filter) ? "" : "none";
-            });
-        }
-    </script>
 </body>
 </html>
