@@ -9,54 +9,55 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- DETECT COLUMNS IN 'TRANSACTIONS' TABLE FOR FLEXIBLE QUERIES ---
+// --- DETECT ACTUAL COLUMNS IN 'TRANSACTIONS' TABLE FROM POSTGRESQL SCHEMA ---
 $tx_cols = [];
 try {
-    $col_stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
-    for ($i = 0; $i < $col_stmt->columnCount(); $i++) {
-        $meta = $col_stmt->getColumnMeta($i);
-        if ($meta && isset($meta['name'])) {
-            $tx_cols[] = strtolower($meta['name']);
-        }
-    }
+    $col_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions'");
+    $tx_cols = array_map('strtolower', $col_stmt->fetchAll(PDO::FETCH_COLUMN));
 } catch (Exception $e) {}
 
-$findCol = function($candidates, $availableCols) {
-    if (empty($availableCols)) return $candidates[0];
+// Fallback if information_schema query returns empty
+if (empty($tx_cols)) {
+    try {
+        $col_stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
+        for ($i = 0; $i < $col_stmt->columnCount(); $i++) {
+            $meta = $col_stmt->getColumnMeta($i);
+            if ($meta && isset($meta['name'])) {
+                $tx_cols[] = strtolower($meta['name']);
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+// Map database column names safely
+$getCol = function($candidates) use ($tx_cols) {
     foreach ($candidates as $cand) {
-        if (in_array(strtolower($cand), $availableCols)) {
+        if (in_array(strtolower($cand), $tx_cols)) {
             return $cand;
         }
     }
-    return $candidates[0];
+    return null;
 };
 
-$col_code = $findCol(['code', 'product_code', 'item_code', 'barcode'], $tx_cols);
-$col_date = $findCol(['transaction_date', 'date', 'created_at'], $tx_cols);
-$col_qty  = $findCol(['qty', 'quantity'], $tx_cols);
-$col_type = $findCol(['transaction_type', 'type', 'tx_type'], $tx_cols);
-$col_cust = $findCol(['customer_name', 'customer', 'name'], $tx_cols);
-$col_desc = $findCol(['description', 'item_name', 'details'], $tx_cols);
-$col_amt  = $findCol(['amount', 'total_amount', 'total', 'price'], $tx_cols);
+$col_code = $getCol(['product_code', 'item_code', 'barcode', 'code']);
+$col_date = $getCol(['transaction_date', 'tx_date', 'date', 'created_at']);
+$col_qty  = $getCol(['qty', 'quantity']);
+$col_type = $getCol(['transaction_type', 'type', 'tx_type']);
+$col_cust = $getCol(['customer_name', 'customer', 'name']);
+$col_desc = $getCol(['description', 'item_name', 'details']);
+$col_amt  = $getCol(['amount', 'total_amount', 'total', 'price']);
 
 
 // --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
 $customer_list = [];
 try {
-    $cust_queries = [
-        "SELECT DISTINCT $col_cust FROM transactions WHERE $col_cust IS NOT NULL AND $col_cust != ''",
-        "SELECT DISTINCT customer_name FROM credit_list WHERE customer_name IS NOT NULL AND customer_name != ''",
-        "SELECT DISTINCT name FROM customers WHERE name IS NOT NULL AND name != ''"
-    ];
-    foreach ($cust_queries as $q) {
-        try {
-            $c_stmt = $pdo->query($q);
-            while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
-                if (!empty($row[0])) {
-                    $customer_list[] = trim($row[0]);
-                }
+    if ($col_cust) {
+        $c_stmt = $pdo->query("SELECT DISTINCT $col_cust FROM transactions WHERE $col_cust IS NOT NULL AND $col_cust != ''");
+        while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
+            if (!empty($row[0])) {
+                $customer_list[] = trim($row[0]);
             }
-        } catch (Exception $ex) {}
+        }
     }
     $customer_list = array_values(array_unique($customer_list));
 } catch (Exception $e) {}
@@ -74,8 +75,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         try {
             $pdo->beginTransaction();
 
-            $sql = "INSERT INTO transactions ($col_code, $col_date, $col_qty, $col_type, $col_cust, $col_desc, $col_amt) 
-                    VALUES (:code, :tdate, :qty, :ttype, :cname, :desc, :amount)";
+            // Construct dynamic INSERT query matching existing columns only
+            $fields = [];
+            $placeholders = [];
+            
+            if ($col_code) { $fields[] = $col_code; $placeholders[] = ':code'; }
+            if ($col_date) { $fields[] = $col_date; $placeholders[] = ':tdate'; }
+            if ($col_qty)  { $fields[] = $col_qty;  $placeholders[] = ':qty'; }
+            if ($col_type) { $fields[] = $col_type; $placeholders[] = ':ttype'; }
+            if ($col_cust) { $fields[] = $col_cust; $placeholders[] = ':cname'; }
+            if ($col_desc) { $fields[] = $col_desc; $placeholders[] = ':desc'; }
+            if ($col_amt)  { $fields[] = $col_amt;  $placeholders[] = ':amount'; }
+
+            $sql = "INSERT INTO transactions (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
             $stmt = $pdo->prepare($sql);
 
             foreach ($items as $item) {
@@ -85,15 +97,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 $amount = $qty * $price;
                 $desc = $item['name'] ?? 'Product Item';
 
-                $stmt->execute([
-                    ':code'   => $barcode,
-                    ':tdate'  => $tx_date,
-                    ':qty'    => $qty,
-                    ':ttype'  => $tx_type,
-                    ':cname'  => ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null,
-                    ':desc'   => $desc,
-                    ':amount' => $amount
-                ]);
+                $binds = [];
+                if ($col_code) $binds[':code']  = $barcode;
+                if ($col_date) $binds[':tdate'] = $tx_date;
+                if ($col_qty)  $binds[':qty']   = $qty;
+                if ($col_type) $binds[':ttype'] = $tx_type;
+                if ($col_cust) $binds[':cname'] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
+                if ($col_desc) $binds[':desc']  = $desc;
+                if ($col_amt)  $binds[':amount'] = $amount;
+
+                $stmt->execute($binds);
 
                 // Deduct inventory quantity if not a pure payment
                 if ($tx_type !== 'Payment') {
@@ -147,18 +160,20 @@ $cash_sales_today = 0;
 $total_credit = 0;
 
 try {
-    $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Cash'");
-    $stmt->execute([$today]);
-    $cash_sales_today = (float)$stmt->fetchColumn();
+    if ($col_amt && $col_date && $col_type) {
+        $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Cash'");
+        $stmt->execute([$today]);
+        $cash_sales_today = (float)$stmt->fetchColumn();
 
-    $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Payment'");
-    $stmt->execute([$today]);
-    $payment_today = (float)$stmt->fetchColumn();
+        $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Payment'");
+        $stmt->execute([$today]);
+        $payment_today = (float)$stmt->fetchColumn();
 
-    $total_cash_today = $cash_sales_today + $payment_today;
+        $total_cash_today = $cash_sales_today + $payment_today;
 
-    $stmt = $pdo->query("SELECT SUM($col_amt) FROM transactions WHERE $col_type = 'Credit'");
-    $total_credit = (float)$stmt->fetchColumn();
+        $stmt = $pdo->query("SELECT SUM($col_amt) FROM transactions WHERE $col_type = 'Credit'");
+        $total_credit = (float)$stmt->fetchColumn();
+    }
 } catch (Exception $e) {}
 
 // --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
@@ -472,7 +487,7 @@ try {
         </a>
     </div>
 
-    <!-- FEEDBACK ALERTS -->
+    <!-- ALERTS -->
     <?php if (!empty($error_message)): ?>
         <div style="background-color: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-weight: 600;">
             ⚠️ <?php echo htmlspecialchars($error_message); ?>
@@ -525,7 +540,6 @@ try {
                     </select>
                 </div>
 
-                <!-- CUSTOMER DROPDOWN WITH TEXT INPUT FALLBACK -->
                 <div class="form-group" id="customer_group" style="display: none;">
                     <label>Customer Name</label>
                     <input type="text" name="customer_name" id="customer_name_input" class="form-control" list="customer_dropdown_list" placeholder="Select or type customer name" autocomplete="off">
@@ -604,20 +618,20 @@ try {
                     <?php if (!empty($transactions)): ?>
                         <?php foreach ($transactions as $tx): ?>
                             <?php 
-                                $t_code = $tx[$col_code] ?? $tx['code'] ?? $tx['product_code'] ?? '-';
-                                $t_date = $tx[$col_date] ?? $tx['transaction_date'] ?? $tx['date'] ?? '-';
-                                $t_qty  = $tx[$col_qty] ?? $tx['qty'] ?? $tx['quantity'] ?? '-';
-                                $t_type = $tx[$col_type] ?? $tx['transaction_type'] ?? $tx['type'] ?? '-';
-                                $t_cust = $tx[$col_cust] ?? $tx['customer_name'] ?? $tx['customer'] ?? '-';
-                                $t_desc = $tx[$col_desc] ?? $tx['description'] ?? $tx['item_name'] ?? '-';
-                                $t_amt  = $tx[$col_amt] ?? $tx['amount'] ?? $tx['total_amount'] ?? 0;
+                                $t_code = ($col_code && isset($tx[$col_code])) ? $tx[$col_code] : ($tx['product_code'] ?? $tx['item_code'] ?? $tx['barcode'] ?? $tx['code'] ?? '-');
+                                $t_date = ($col_date && isset($tx[$col_date])) ? $tx[$col_date] : ($tx['transaction_date'] ?? $tx['date'] ?? '-');
+                                $t_qty  = ($col_qty && isset($tx[$col_qty]))   ? $tx[$col_qty]  : ($tx['qty'] ?? $tx['quantity'] ?? '-');
+                                $t_type = ($col_type && isset($tx[$col_type])) ? $tx[$col_type] : ($tx['transaction_type'] ?? $tx['type'] ?? '-');
+                                $t_cust = ($col_cust && isset($tx[$col_cust])) ? $tx[$col_cust] : ($tx['customer_name'] ?? $tx['customer'] ?? '-');
+                                $t_desc = ($col_desc && isset($tx[$col_desc])) ? $tx[$col_desc] : ($tx['description'] ?? $tx['item_name'] ?? '-');
+                                $t_amt  = ($col_amt && isset($tx[$col_amt]))   ? $tx[$col_amt]  : ($tx['amount'] ?? $tx['total_amount'] ?? 0);
                             ?>
                             <tr>
                                 <td><?php echo htmlspecialchars((string)$t_code); ?></td>
                                 <td><?php echo htmlspecialchars((string)$t_date); ?></td>
                                 <td><?php echo htmlspecialchars((string)$t_qty); ?></td>
                                 <td><span class="badge-type"><?php echo htmlspecialchars((string)$t_type); ?></span></td>
-                                <td><em><?php echo htmlspecialchars((string)$t_cust); ?></em></td>
+                                <td><em><?php echo htmlspecialchars((string)($t_cust ?: '-')); ?></em></td>
                                 <td><?php echo htmlspecialchars((string)$t_desc); ?></td>
                                 <td><strong>₱<?php echo number_format((float)$t_amt, 2); ?></strong></td>
                                 <td>
