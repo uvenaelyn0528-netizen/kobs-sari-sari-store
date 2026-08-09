@@ -7,11 +7,65 @@ session_start();
 require_once 'db.php';
 
 $today = date('Y-m-d');
+$error_message = '';
+
+// --- DETECT COLUMNS IN 'TRANSACTIONS' TABLE FOR FLEXIBLE QUERIES ---
+$tx_cols = [];
+try {
+    $col_stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
+    for ($i = 0; $i < $col_stmt->columnCount(); $i++) {
+        $meta = $col_stmt->getColumnMeta($i);
+        if ($meta && isset($meta['name'])) {
+            $tx_cols[] = strtolower($meta['name']);
+        }
+    }
+} catch (Exception $e) {}
+
+$findCol = function($candidates, $availableCols) {
+    if (empty($availableCols)) return $candidates[0];
+    foreach ($candidates as $cand) {
+        if (in_array(strtolower($cand), $availableCols)) {
+            return $cand;
+        }
+    }
+    return $candidates[0];
+};
+
+$col_code = $findCol(['code', 'product_code', 'item_code', 'barcode'], $tx_cols);
+$col_date = $findCol(['transaction_date', 'date', 'created_at'], $tx_cols);
+$col_qty  = $findCol(['qty', 'quantity'], $tx_cols);
+$col_type = $findCol(['transaction_type', 'type', 'tx_type'], $tx_cols);
+$col_cust = $findCol(['customer_name', 'customer', 'name'], $tx_cols);
+$col_desc = $findCol(['description', 'item_name', 'details'], $tx_cols);
+$col_amt  = $findCol(['amount', 'total_amount', 'total', 'price'], $tx_cols);
+
+
+// --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
+$customer_list = [];
+try {
+    $cust_queries = [
+        "SELECT DISTINCT $col_cust FROM transactions WHERE $col_cust IS NOT NULL AND $col_cust != ''",
+        "SELECT DISTINCT customer_name FROM credit_list WHERE customer_name IS NOT NULL AND customer_name != ''",
+        "SELECT DISTINCT name FROM customers WHERE name IS NOT NULL AND name != ''"
+    ];
+    foreach ($cust_queries as $q) {
+        try {
+            $c_stmt = $pdo->query($q);
+            while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
+                if (!empty($row[0])) {
+                    $customer_list[] = trim($row[0]);
+                }
+            }
+        } catch (Exception $ex) {}
+    }
+    $customer_list = array_values(array_unique($customer_list));
+} catch (Exception $e) {}
+
 
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
     $tx_type = $_POST['tx_type'] ?? 'Cash';
-    $customer_name = $_POST['customer_name'] ?? null;
+    $customer_name = trim($_POST['customer_name'] ?? '');
     $tx_date = $_POST['tx_date'] ?? $today;
     $items_raw = $_POST['items_payload'] ?? '[]';
     $items = json_decode($items_raw, true);
@@ -20,6 +74,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         try {
             $pdo->beginTransaction();
 
+            $sql = "INSERT INTO transactions ($col_code, $col_date, $col_qty, $col_type, $col_cust, $col_desc, $col_amt) 
+                    VALUES (:code, :tdate, :qty, :ttype, :cname, :desc, :amount)";
+            $stmt = $pdo->prepare($sql);
+
             foreach ($items as $item) {
                 $barcode = trim($item['code']);
                 $qty = (int)$item['qty'];
@@ -27,22 +85,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 $amount = $qty * $price;
                 $desc = $item['name'] ?? 'Product Item';
 
-                // 1. Insert into transactions table
-                $stmt = $pdo->prepare("
-                    INSERT INTO transactions (code, transaction_date, qty, transaction_type, customer_name, description, amount)
-                    VALUES (:code, :tdate, :qty, :ttype, :cname, :desc, :amount)
-                ");
                 $stmt->execute([
-                    ':code' => $barcode,
-                    ':tdate' => $tx_date,
-                    ':qty' => $qty,
-                    ':ttype' => $tx_type,
-                    ':cname' => ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null,
-                    ':desc' => $desc,
+                    ':code'   => $barcode,
+                    ':tdate'  => $tx_date,
+                    ':qty'    => $qty,
+                    ':ttype'  => $tx_type,
+                    ':cname'  => ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null,
+                    ':desc'   => $desc,
                     ':amount' => $amount
                 ]);
 
-                // 2. Deduct inventory quantity (if not a pure payment)
+                // Deduct inventory quantity if not a pure payment
                 if ($tx_type !== 'Payment') {
                     try {
                         $deductStmt = $pdo->prepare("
@@ -61,9 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                                 WHERE product_code = :barcode OR barcode = :barcode
                             ");
                             $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
-                        } catch (Exception $ex2) {
-                            // Suppress deduction error to ensure transaction log completes
-                        }
+                        } catch (Exception $ex2) {}
                     }
                 }
             }
@@ -96,45 +147,37 @@ $cash_sales_today = 0;
 $total_credit = 0;
 
 try {
-    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Cash'");
+    $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Cash'");
     $stmt->execute([$today]);
     $cash_sales_today = (float)$stmt->fetchColumn();
 
-    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Payment'");
+    $stmt = $pdo->prepare("SELECT SUM($col_amt) FROM transactions WHERE $col_date = ? AND $col_type = 'Payment'");
     $stmt->execute([$today]);
     $payment_today = (float)$stmt->fetchColumn();
 
     $total_cash_today = $cash_sales_today + $payment_today;
 
-    $stmt = $pdo->query("SELECT SUM(amount) FROM transactions WHERE transaction_type = 'Credit'");
+    $stmt = $pdo->query("SELECT SUM($col_amt) FROM transactions WHERE $col_type = 'Credit'");
     $total_credit = (float)$stmt->fetchColumn();
 } catch (Exception $e) {}
 
 // --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
 $products_map = [];
 try {
-    // Select all columns to support flexible table schemas across environments
     $prod_stmt = $pdo->query("SELECT * FROM products");
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        // Flexibly map barcode/code column
         $code = $p['product_code'] ?? $p['barcode'] ?? $p['item_code'] ?? $p['code'] ?? null;
-        
-        // Flexibly map product name column
         $name = $p['product_name'] ?? $p['item_name'] ?? $p['description'] ?? 'Product Item';
-        
-        // Flexibly map price column
         $price = $p['retail_price'] ?? $p['selling_price'] ?? $p['price'] ?? 0;
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
-                'name' => $name,
+                'name'  => $name,
                 'price' => (float)$price
             ];
         }
     }
-} catch (Exception $e) {
-    error_log("Product fetch error: " . $e->getMessage());
-}
+} catch (Exception $e) {}
 
 // --- FETCH RECENT TRANSACTIONS ---
 $transactions = [];
@@ -166,7 +209,6 @@ try {
             color: var(--text-dark);
         }
 
-        /* --- BACK BUTTON STYLING --- */
         .back-btn-container {
             margin-bottom: 15px;
         }
@@ -193,7 +235,6 @@ try {
             color: var(--primary-blue);
         }
 
-        /* --- STAT SUMMARY CARDS --- */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -233,7 +274,6 @@ try {
         .stat-card.blue .amount { color: #1d4ed8; }
         .stat-card.orange .amount { color: #c2410c; }
 
-        /* --- MAIN SPLIT CONTAINER --- */
         .main-container {
             display: grid;
             grid-template-columns: 420px 1fr;
@@ -256,7 +296,6 @@ try {
             color: var(--text-dark);
         }
 
-        /* --- FORM STYLING --- */
         .form-group {
             margin-bottom: 14px;
         }
@@ -306,7 +345,6 @@ try {
             background-color: var(--primary-hover);
         }
 
-        /* --- STAGED ITEMS TABLE --- */
         .cart-box {
             margin: 15px 0;
             border: 1px solid #e2e8f0;
@@ -347,7 +385,6 @@ try {
             padding: 2px 6px;
         }
 
-        /* --- SUMMARY & ACTION --- */
         .cart-summary {
             background: #eff6ff;
             border: 1px solid #bfdbfe;
@@ -388,7 +425,6 @@ try {
             background-color: #4338ca;
         }
 
-        /* --- TRANSACTION HISTORY TABLE --- */
         .history-table {
             width: 100%;
             border-collapse: collapse;
@@ -430,14 +466,26 @@ try {
 </head>
 <body>
 
-    <!-- UPPER LEFT BACK BUTTON TO STORE.PHP -->
     <div class="back-btn-container">
         <a href="store.php" class="back-to-store-btn">
             &larr; Back to Store
         </a>
     </div>
 
-    <!-- TOP TOTAL SUMMARY CARDS -->
+    <!-- FEEDBACK ALERTS -->
+    <?php if (!empty($error_message)): ?>
+        <div style="background-color: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-weight: 600;">
+            ⚠️ <?php echo htmlspecialchars($error_message); ?>
+        </div>
+    <?php endif; ?>
+
+    <?php if (isset($_GET['success'])): ?>
+        <div style="background-color: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-weight: 600;">
+            ✅ Transaction processed successfully!
+        </div>
+    <?php endif; ?>
+
+    <!-- STAT CARDS -->
     <div class="stats-grid">
         <div class="stat-card yellow">
             <div class="title">Total Cash On Hand (Today)</div>
@@ -457,10 +505,10 @@ try {
         </div>
     </div>
 
-    <!-- MAIN TWO-COLUMN WORKSPACE -->
+    <!-- MAIN WORKSPACE -->
     <div class="main-container">
         
-        <!-- LEFT: MULTI-ITEM SCANNER & TRANSACTION BUILDER -->
+        <!-- TRANSACTION FORM -->
         <div class="panel-card">
             <h2 class="panel-title">Record Transaction</h2>
             
@@ -477,12 +525,17 @@ try {
                     </select>
                 </div>
 
+                <!-- CUSTOMER DROPDOWN WITH TEXT INPUT FALLBACK -->
                 <div class="form-group" id="customer_group" style="display: none;">
                     <label>Customer Name</label>
-                    <input type="text" name="customer_name" class="form-control" placeholder="Enter customer name">
+                    <input type="text" name="customer_name" id="customer_name_input" class="form-control" list="customer_dropdown_list" placeholder="Select or type customer name" autocomplete="off">
+                    <datalist id="customer_dropdown_list">
+                        <?php foreach ($customer_list as $cname): ?>
+                            <option value="<?php echo htmlspecialchars($cname); ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
                 </div>
 
-                <!-- SCAN BARCODE / CODE ROW -->
                 <div class="form-group">
                     <label>Product Barcode / Code</label>
                     <div class="scan-row">
@@ -494,7 +547,6 @@ try {
                     </div>
                 </div>
 
-                <!-- SCANNED ITEMS CART LIST -->
                 <div class="cart-box">
                     <table class="cart-table">
                         <thead>
@@ -514,7 +566,6 @@ try {
                     </table>
                 </div>
 
-                <!-- COMPUTED TRANSACTION TOTAL -->
                 <div class="cart-summary">
                     <span class="label">Total Amount:</span>
                     <span class="total-value" id="grand_total_display">₱0.00</span>
@@ -529,7 +580,7 @@ try {
             </form>
         </div>
 
-        <!-- RIGHT: TRANSACTION HISTORY LOG -->
+        <!-- HISTORY LOG -->
         <div class="panel-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                 <h2 class="panel-title" style="margin: 0;">Transaction History Log</h2>
@@ -552,14 +603,23 @@ try {
                 <tbody>
                     <?php if (!empty($transactions)): ?>
                         <?php foreach ($transactions as $tx): ?>
+                            <?php 
+                                $t_code = $tx[$col_code] ?? $tx['code'] ?? $tx['product_code'] ?? '-';
+                                $t_date = $tx[$col_date] ?? $tx['transaction_date'] ?? $tx['date'] ?? '-';
+                                $t_qty  = $tx[$col_qty] ?? $tx['qty'] ?? $tx['quantity'] ?? '-';
+                                $t_type = $tx[$col_type] ?? $tx['transaction_type'] ?? $tx['type'] ?? '-';
+                                $t_cust = $tx[$col_cust] ?? $tx['customer_name'] ?? $tx['customer'] ?? '-';
+                                $t_desc = $tx[$col_desc] ?? $tx['description'] ?? $tx['item_name'] ?? '-';
+                                $t_amt  = $tx[$col_amt] ?? $tx['amount'] ?? $tx['total_amount'] ?? 0;
+                            ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($tx['code'] ?? '-'); ?></td>
-                                <td><?php echo htmlspecialchars($tx['transaction_date']); ?></td>
-                                <td><?php echo htmlspecialchars($tx['qty'] ?? '-'); ?></td>
-                                <td><span class="badge-type"><?php echo htmlspecialchars($tx['transaction_type']); ?></span></td>
-                                <td><em><?php echo htmlspecialchars($tx['customer_name'] ?? '-'); ?></em></td>
-                                <td><?php echo htmlspecialchars($tx['description'] ?? ''); ?></td>
-                                <td><strong>₱<?php echo number_format($tx['amount'], 2); ?></strong></td>
+                                <td><?php echo htmlspecialchars((string)$t_code); ?></td>
+                                <td><?php echo htmlspecialchars((string)$t_date); ?></td>
+                                <td><?php echo htmlspecialchars((string)$t_qty); ?></td>
+                                <td><span class="badge-type"><?php echo htmlspecialchars((string)$t_type); ?></span></td>
+                                <td><em><?php echo htmlspecialchars((string)$t_cust); ?></em></td>
+                                <td><?php echo htmlspecialchars((string)$t_desc); ?></td>
+                                <td><strong>₱<?php echo number_format((float)$t_amt, 2); ?></strong></td>
                                 <td>
                                     <a href="stockout.php?delete_id=<?php echo $tx['id']; ?>" class="action-del" onclick="return confirm('Delete this record?')">Delete</a>
                                 </td>
@@ -576,11 +636,8 @@ try {
 
     </div>
 
-    <!-- CLIENT-SIDE MULTI-SCAN & CART ENGINE -->
     <script>
-        // Loaded dynamically from products table
         const productDatabase = <?php echo json_encode($products_map); ?>;
-        
         let cartItems = [];
 
         const barcodeInput = document.getElementById('barcode_input');
@@ -589,7 +646,6 @@ try {
         const grandTotalDisplay = document.getElementById('grand_total_display');
         const itemsPayload = document.getElementById('items_payload');
 
-        // Execute scan addition on Enter keypress
         barcodeInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
