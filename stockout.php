@@ -9,9 +9,8 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION (HISTORY LOG) ---
+// --- HELPER FUNCTIONS FOR TYPE-SAFE COLUMN HANDLING ---
 function getTxVal($row, $candidates, $keywords = [], $default = '-') {
-    // 1. Try exact match on candidates
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
             if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '') {
@@ -19,7 +18,6 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
             }
         }
     }
-    // 2. Fallback to keyword search on column names
     foreach ($keywords as $kw) {
         foreach ($row as $col_name => $val) {
             if (strpos(strtolower($col_name), strtolower($kw)) !== false && $val !== null && trim((string)$val) !== '') {
@@ -30,20 +28,24 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
     return $default;
 }
 
-// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS & GENERATED COLUMNS ---
+// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS & DATA TYPES ---
 $tx_columns = [];
+$tx_col_types = [];
 $generated_cols = [];
 
 try {
     $col_stmt = $pdo->query("
-        SELECT column_name, is_generated, generation_expression 
+        SELECT column_name, data_type, is_generated, generation_expression 
         FROM information_schema.columns 
         WHERE lower(table_name) = 'transactions' 
           AND table_schema = 'public'
     ");
     while ($r = $col_stmt->fetch(PDO::FETCH_ASSOC)) {
         $cname = $r['column_name'];
+        $dtype = strtolower($r['data_type'] ?? 'text');
         $tx_columns[] = $cname;
+        $tx_col_types[strtolower($cname)] = $dtype;
+        
         $is_gen = strtoupper($r['is_generated'] ?? 'NEVER');
         if ($is_gen === 'ALWAYS' || !empty($r['generation_expression'])) {
             $generated_cols[] = strtolower($cname);
@@ -51,20 +53,21 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fallback column discovery if information_schema query fails
-if (empty($tx_columns)) {
-    try {
-        $stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
-        for ($i = 0; $i < $stmt->columnCount(); $i++) {
-            $meta = $stmt->getColumnMeta($i);
-            if (!empty($meta['name'])) {
-                $tx_columns[] = $meta['name'];
-            }
-        }
-    } catch (Exception $e) {}
+// Data Type Verification Helpers
+function isTextType($cname, $tx_col_types) {
+    $c_lower = strtolower($cname);
+    if (!isset($tx_col_types[$c_lower])) return true;
+    $dt = $tx_col_types[$c_lower];
+    return (strpos($dt, 'char') !== false || strpos($dt, 'text') !== false || strpos($dt, 'varchar') !== false || strpos($dt, 'string') !== false);
 }
 
-// Function to find ALL columns matching candidates or keywords
+function isIntType($cname, $tx_col_types) {
+    $c_lower = strtolower($cname);
+    if (!isset($tx_col_types[$c_lower])) return false;
+    $dt = $tx_col_types[$c_lower];
+    return (strpos($dt, 'int') !== false || strpos($dt, 'serial') !== false);
+}
+
 function findAllMatchingColumns($candidates, $keywords, $tx_columns, $exclude_cols = []) {
     $matched = [];
     $tx_lower = array_map('strtolower', $tx_columns);
@@ -101,12 +104,15 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     return !empty($matches) ? $matches[0] : null;
 }
 
-// Define field mappings across all schema variations
-$code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'product_id', 'item_id', 'p_code', 'prod_id', 'upc', 'ean'];
+// Field Mappings
+$code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
 $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
-$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
-$desc_keywords   = ['desc', 'name', 'detail', 'title', 'item', 'product', 'particular', 'remark'];
+$id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
+$id_keywords     = ['product_id', 'item_id'];
+
+$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
+$desc_keywords   = ['desc', 'particular', 'remark'];
 
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
@@ -123,8 +129,9 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val', 'price_total'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Mappings for INSERT (excluding generated columns)
+// Detected Columns for INSERT
 $all_code_cols = findAllMatchingColumns($code_candidates, $code_keywords, $tx_columns, $generated_cols);
+$all_id_cols   = findAllMatchingColumns($id_candidates, $id_keywords, $tx_columns, $generated_cols);
 $all_desc_cols = findAllMatchingColumns($desc_candidates, $desc_keywords, $tx_columns, $generated_cols);
 $all_cust_cols = findAllMatchingColumns($cust_candidates, $cust_keywords, $tx_columns, $generated_cols);
 
@@ -136,15 +143,6 @@ $col_amt_ins  = findSingleColumn($amt_candidates, $amt_keywords, $tx_columns, $g
 $col_retail_price_ins = findSingleColumn(['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], $tx_columns, $generated_cols);
 $col_unit_price_ins   = findSingleColumn(['unit_price'], ['unit'], $tx_columns, $generated_cols);
 $col_buy_price_ins    = findSingleColumn(['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], $tx_columns, $generated_cols);
-
-// Mappings for SELECT / Dashboard queries
-$col_code = findSingleColumn($code_candidates, $code_keywords, $tx_columns);
-$col_desc = findSingleColumn($desc_candidates, $desc_keywords, $tx_columns);
-$col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
-$col_type = findSingleColumn($type_candidates, $type_keywords, $tx_columns);
-$col_qty  = findSingleColumn($qty_candidates, $qty_keywords, $tx_columns);
-$col_date = findSingleColumn($date_candidates, $date_keywords, $tx_columns);
-$col_amt  = findSingleColumn($amt_candidates, $amt_keywords, $tx_columns);
 
 $pk_col = $tx_columns[0] ?? 'id';
 
@@ -161,8 +159,9 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
+// Customer list for dropdown
 $customer_list = [];
+$col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
 try {
     if ($col_cust) {
         $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != ''");
@@ -187,28 +186,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             $pdo->beginTransaction();
 
             foreach ($items as $item) {
-                $barcode   = trim($item['code']);
-                $qty       = (int)$item['qty'];
-                $price     = (float)$item['price'];
-                $buy_price = (float)($item['buy_price'] ?? 0);
-                $amount    = $qty * $price;
-                $desc      = !empty($item['name']) ? $item['name'] : 'Product Item';
+                $barcode    = trim($item['code']);
+                $prod_id    = (int)($item['id'] ?? 0);
+                $qty        = (int)$item['qty'];
+                $price      = (float)$item['price'];
+                $buy_price  = (float)($item['buy_price'] ?? 0);
+                $amount     = $qty * $price;
+                $desc       = !empty($item['name']) ? $item['name'] : 'Product Item';
 
                 $insert_data = [];
 
-                // Populate ALL detected code/barcode columns
-                foreach ($all_code_cols as $c_col) {
-                    $insert_data[$c_col] = $barcode;
-                }
-
-                // Populate ALL detected description/product name columns
+                // Populate Description ONLY into Text/Varchar columns
                 foreach ($all_desc_cols as $d_col) {
-                    $insert_data[$d_col] = $desc;
+                    if (isTextType($d_col, $tx_col_types)) {
+                        $insert_data[$d_col] = $desc;
+                    }
                 }
 
-                // Populate ALL detected customer columns
+                // Populate Code/Barcode according to column data type
+                foreach ($all_code_cols as $c_col) {
+                    if (isIntType($c_col, $tx_col_types)) {
+                        $insert_data[$c_col] = is_numeric($barcode) ? (int)$barcode : 0;
+                    } else {
+                        $insert_data[$c_col] = $barcode;
+                    }
+                }
+
+                // Populate Integer Product/Item ID columns
+                foreach ($all_id_cols as $id_col) {
+                    if (isIntType($id_col, $tx_col_types)) {
+                        $insert_data[$id_col] = $prod_id > 0 ? $prod_id : (is_numeric($barcode) ? (int)$barcode : 0);
+                    }
+                }
+
+                // Populate Customer Name (Text columns only)
                 foreach ($all_cust_cols as $cu_col) {
-                    $insert_data[$cu_col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
+                    if (isTextType($cu_col, $tx_col_types)) {
+                        $insert_data[$cu_col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
+                    }
                 }
 
                 if ($col_date_ins)         $insert_data[$col_date_ins]         = $tx_date;
@@ -219,7 +234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 if ($col_unit_price_ins)   $insert_data[$col_unit_price_ins]   = $price;
                 if ($col_buy_price_ins)    $insert_data[$col_buy_price_ins]    = $buy_price;
 
-                // Safely fill non-nullable columns missing default values
+                // Safely fill non-nullable columns missing default values matching data type
                 try {
                     $nn_stmt = $pdo->query("
                         SELECT column_name, data_type, is_generated 
@@ -238,6 +253,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                             $dtype = strtolower($nn_row['data_type']);
                             if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
                                 $insert_data[$c_name] = 0;
+                            } elseif (strpos($dtype, 'bool') !== false) {
+                                $insert_data[$c_name] = false;
+                            } elseif (strpos($dtype, 'date') !== false || strpos($dtype, 'time') !== false) {
+                                $insert_data[$c_name] = $tx_date;
                             } else {
                                 $insert_data[$c_name] = 'N/A';
                             }
@@ -245,7 +264,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 } catch (Exception $e) {}
 
-                // Strictly strip any generated columns before INSERT
+                // Strictly strip any generated columns prior to INSERT
                 foreach ($generated_cols as $gcol) {
                     foreach ($insert_data as $ik => $iv) {
                         if (strtolower($ik) === $gcol) {
@@ -254,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Construct & execute INSERT query
+                // Build & execute INSERT
                 $fields = array_keys($insert_data);
                 $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
 
@@ -309,6 +328,10 @@ $payment_today = 0;
 $cash_sales_today = 0;
 $total_credit = 0;
 
+$col_amt  = findSingleColumn($amt_candidates, $amt_keywords, $tx_columns);
+$col_date = findSingleColumn($date_candidates, $date_keywords, $tx_columns);
+$col_type = findSingleColumn($type_candidates, $type_keywords, $tx_columns);
+
 try {
     if ($col_amt && $col_date && $col_type) {
         $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND {$col_type} = 'Cash'");
@@ -326,7 +349,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- FETCH PRODUCT LIST FOR BARCODE SCANNER LOOKUP ---
+// --- FETCH PRODUCTS FOR SCANNER LOOKUP ---
 $products_map = [];
 try {
     $prod_stmt = $pdo->query("SELECT * FROM products");
@@ -335,9 +358,11 @@ try {
         $name = getTxVal($p, $desc_candidates, $desc_keywords, 'Product Item');
         $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
         $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], 0);
+        $p_id = $p['id'] ?? $p['product_id'] ?? $p['item_id'] ?? 0;
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
+                'id'        => (int)$p_id,
                 'name'      => $name,
                 'price'     => (float)$price,
                 'buy_price' => (float)$buy_price
@@ -831,11 +856,13 @@ try {
 
             if (!code) return;
 
+            let id = 0;
             let name = "Scanned Item (" + code + ")";
             let price = 0.00;
             let buyPrice = 0.00;
 
             if (productDatabase[code]) {
+                id = productDatabase[code].id || 0;
                 name = productDatabase[code].name;
                 price = parseFloat(productDatabase[code].price) || 0.00;
                 buyPrice = parseFloat(productDatabase[code].buy_price) || 0.00;
@@ -850,6 +877,7 @@ try {
                 cartItems[existingIndex].qty += qty;
             } else {
                 cartItems.push({
+                    id: id,
                     code: code,
                     name: name,
                     price: price,
