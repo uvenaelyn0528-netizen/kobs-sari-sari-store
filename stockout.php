@@ -21,19 +21,28 @@ function getTxVal($row, $candidates, $default = '-') {
     return $default;
 }
 
-// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS ---
+// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS & GENERATED COLUMNS ---
 $tx_columns = [];
+$generated_cols = [];
+
 try {
     $col_stmt = $pdo->query("
-        SELECT column_name 
+        SELECT column_name, is_generated, generation_expression 
         FROM information_schema.columns 
         WHERE lower(table_name) = 'transactions' 
           AND table_schema = 'public'
     ");
-    $tx_columns = $col_stmt->fetchAll(PDO::FETCH_COLUMN);
+    while ($r = $col_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $cname = $r['column_name'];
+        $tx_columns[] = $cname;
+        $is_gen = strtoupper($r['is_generated'] ?? 'NEVER');
+        if ($is_gen === 'ALWAYS' || !empty($r['generation_expression'])) {
+            $generated_cols[] = strtolower($cname);
+        }
+    }
 } catch (Exception $e) {}
 
-// Fallback column discovery if information_schema query returns empty
+// Fallback column discovery if information_schema fails
 if (empty($tx_columns)) {
     try {
         $stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
@@ -48,17 +57,20 @@ if (empty($tx_columns)) {
 
 $tx_cols_lower = array_map('strtolower', $tx_columns);
 
-function findColumn($candidates, $cols_lower, $original_cols) {
+function findColumn($candidates, $cols_lower, $original_cols, $exclude_list = []) {
     foreach ($candidates as $cand) {
         $idx = array_search(strtolower($cand), $cols_lower);
         if ($idx !== false) {
-            return $original_cols[$idx];
+            $found_name = $original_cols[$idx];
+            if (!in_array(strtolower($found_name), $exclude_list)) {
+                return $found_name;
+            }
         }
     }
     return null;
 }
 
-// Map column names in database
+// Map column names for display/queries
 $col_code = findColumn(['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code'], $tx_cols_lower, $tx_columns);
 $col_type = findColumn(['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], $tx_cols_lower, $tx_columns);
 $col_desc = findColumn(['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item'], $tx_cols_lower, $tx_columns);
@@ -66,7 +78,21 @@ $col_cust = findColumn(['customer_name', 'customer', 'client_name', 'client', 'c
 $col_qty  = findColumn(['qty', 'quantity', 'qty_sold', 'count'], $tx_cols_lower, $tx_columns);
 $col_date = findColumn(['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp'], $tx_cols_lower, $tx_columns);
 $col_amt  = findColumn(['amount', 'total_amount', 'total', 'price', 'retail_price', 'subtotal'], $tx_cols_lower, $tx_columns);
-$pk_col   = $tx_columns[0] ?? 'id';
+
+// Map column names for INSERT (strictly excluding generated columns like 'total_amount')
+$col_code_ins = findColumn(['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_type_ins = findColumn(['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_desc_ins = findColumn(['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_cust_ins = findColumn(['customer_name', 'customer', 'client_name', 'client', 'cust_name'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_qty_ins  = findColumn(['qty', 'quantity', 'qty_sold', 'count'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_date_ins = findColumn(['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_amt_ins  = findColumn(['amount', 'price', 'retail_price', 'subtotal', 'total'], $tx_cols_lower, $tx_columns, $generated_cols);
+
+$col_retail_price_ins = findColumn(['retail_price', 'selling_price', 'price', 'unit_price'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_unit_price_ins   = findColumn(['unit_price'], $tx_cols_lower, $tx_columns, $generated_cols);
+$col_buy_price_ins    = findColumn(['buy_price', 'cost_price', 'cost', 'purchase_price'], $tx_cols_lower, $tx_columns, $generated_cols);
+
+$pk_col = $tx_columns[0] ?? 'id';
 
 // --- 2. PRE-DETECT COLUMNS IN 'PRODUCTS' TABLE ---
 $prod_qty_col = null;
@@ -82,7 +108,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fallback discovery for products
 if (!$prod_qty_col || !$prod_code_col) {
     try {
         $p_stmt = $pdo->query("SELECT * FROM products LIMIT 1");
@@ -123,26 +148,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             $pdo->beginTransaction();
 
             foreach ($items as $item) {
-                $barcode = trim($item['code']);
-                $qty = (int)$item['qty'];
-                $price = (float)$item['price'];
-                $amount = $qty * $price;
-                $desc = !empty($item['name']) ? $item['name'] : 'Product Item';
+                $barcode   = trim($item['code']);
+                $qty       = (int)$item['qty'];
+                $price     = (float)$item['price'];
+                $buy_price = (float)($item['buy_price'] ?? 0);
+                $amount    = $qty * $price;
+                $desc      = !empty($item['name']) ? $item['name'] : 'Product Item';
 
-                // Map data dynamically to existing DB columns
                 $insert_data = [];
-                if ($col_code) $insert_data[$col_code] = $barcode;
-                if ($col_date) $insert_data[$col_date] = $tx_date;
-                if ($col_qty)  $insert_data[$col_qty]  = $qty;
-                if ($col_type) $insert_data[$col_type] = $tx_type;
-                if ($col_cust) $insert_data[$col_cust] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
-                if ($col_desc) $insert_data[$col_desc] = $desc;
-                if ($col_amt)  $insert_data[$col_amt]  = $amount;
+                if ($col_code_ins)         $insert_data[$col_code_ins]         = $barcode;
+                if ($col_date_ins)         $insert_data[$col_date_ins]         = $tx_date;
+                if ($col_qty_ins)          $insert_data[$col_qty_ins]          = $qty;
+                if ($col_type_ins)         $insert_data[$col_type_ins]         = $tx_type;
+                if ($col_cust_ins)         $insert_data[$col_cust_ins]         = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
+                if ($col_desc_ins)         $insert_data[$col_desc_ins]         = $desc;
+                if ($col_amt_ins)          $insert_data[$col_amt_ins]          = $amount;
+                if ($col_retail_price_ins) $insert_data[$col_retail_price_ins] = $price;
+                if ($col_unit_price_ins)   $insert_data[$col_unit_price_ins]   = $price;
+                if ($col_buy_price_ins)    $insert_data[$col_buy_price_ins]    = $buy_price;
 
-                // Safely fill non-nullable unmapped columns with defaults
+                // Handle unmapped non-nullable columns safely
                 try {
                     $nn_stmt = $pdo->query("
-                        SELECT column_name, data_type 
+                        SELECT column_name, data_type, is_generated 
                         FROM information_schema.columns 
                         WHERE lower(table_name) = 'transactions' 
                           AND table_schema = 'public' 
@@ -151,6 +179,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     ");
                     while ($nn_row = $nn_stmt->fetch(PDO::FETCH_ASSOC)) {
                         $c_name = $nn_row['column_name'];
+                        $is_gen = strtoupper($nn_row['is_generated'] ?? 'NEVER');
+                        if ($is_gen === 'ALWAYS') continue;
+
                         if (!array_key_exists($c_name, $insert_data) && strtolower($c_name) !== strtolower($pk_col)) {
                             $dtype = strtolower($nn_row['data_type']);
                             if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
@@ -161,6 +192,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         }
                     }
                 } catch (Exception $e) {}
+
+                // Remove any generated columns from array before INSERT
+                foreach ($generated_cols as $gcol) {
+                    foreach ($insert_data as $ik => $iv) {
+                        if (strtolower($ik) === $gcol) {
+                            unset($insert_data[$ik]);
+                        }
+                    }
+                }
 
                 // Build & execute INSERT
                 $fields = array_keys($insert_data);
@@ -175,7 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct inventory
+                // Deduct product stock
                 if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -689,7 +729,7 @@ try {
                                 $t_type = getTxVal($tx, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], 'Cash');
                                 $t_cust = getTxVal($tx, ['customer_name', 'customer', 'client_name', 'client', 'cust_name']);
                                 $t_desc = getTxVal($tx, ['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item']);
-                                $t_amt  = getTxVal($tx, ['amount', 'total_amount', 'total', 'price', 'retail_price', 'subtotal'], 0);
+                                $t_amt  = getTxVal($tx, ['total_amount', 'amount', 'total', 'price', 'retail_price', 'subtotal'], 0);
                                 $row_id = $tx[$pk_col] ?? reset($tx);
                             ?>
                             <tr>
