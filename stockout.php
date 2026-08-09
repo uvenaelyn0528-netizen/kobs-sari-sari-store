@@ -9,89 +9,80 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- 1. DETECT COLUMNS IN 'TRANSACTIONS' TABLE ---
-$all_tx_cols = [];
-$insertable_tx_cols = [];
-$not_null_cols = [];
-$pk_col = 'id';
-
-try {
-    $col_stmt = $pdo->query("
-        SELECT column_name, is_generated, is_insertable_into, is_nullable, column_default 
-        FROM information_schema.columns 
-        WHERE table_name = 'transactions'
-    ");
-    while ($row = $col_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $cname = strtolower($row['column_name']);
-        $all_tx_cols[] = $cname;
-        
-        $is_gen = strtoupper($row['is_generated'] ?? 'NEVER');
-        $is_ins = strtoupper($row['is_insertable_into'] ?? 'YES');
-        
-        if ($is_gen !== 'ALWAYS' && $is_ins !== 'NO' && $cname !== 'total_amount') {
-            $insertable_tx_cols[] = $cname;
-            if (strtoupper($row['is_nullable']) === 'NO' && $row['column_default'] === null) {
-                $not_null_cols[] = $cname;
+// --- HELPER FUNCTION FOR CASE-INSENSITIVE ROW VALUE EXTRACTION ---
+function getTxVal($row, $candidates, $default = '-') {
+    foreach ($candidates as $cand) {
+        foreach ($row as $col_name => $val) {
+            if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '') {
+                return $val;
             }
         }
     }
-} catch (Exception $e) {}
+    return $default;
+}
 
-// Detect Primary Key Column
+// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS ---
+$tx_columns = [];
 try {
-    $pk_stmt = $pdo->query("
-        SELECT kcu.column_name
-        FROM information_schema.table_constraints tco
-        JOIN information_schema.key_column_usage kcu 
-          ON kcu.constraint_name = tco.constraint_name
-         AND kcu.table_schema = tco.table_schema
-        WHERE tco.constraint_type = 'PRIMARY KEY'
-          AND tco.table_name = 'transactions'
-        LIMIT 1
+    $col_stmt = $pdo->query("
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE lower(table_name) = 'transactions' 
+          AND table_schema = 'public'
     ");
-    $pk_found = $pk_stmt->fetchColumn();
-    if ($pk_found) {
-        $pk_col = strtolower($pk_found);
-    }
+    $tx_columns = $col_stmt->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
 
-// Fallback column discovery if information_schema fails
-if (empty($all_tx_cols)) {
+// Fallback column discovery if information_schema query returns empty
+if (empty($tx_columns)) {
     try {
-        $col_stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
-        for ($i = 0; $i < $col_stmt->columnCount(); $i++) {
-            $meta = $col_stmt->getColumnMeta($i);
-            if ($meta && isset($meta['name'])) {
-                $cname = strtolower($meta['name']);
-                $all_tx_cols[] = $cname;
-                if ($i === 0) $pk_col = $cname;
-                if ($cname !== 'total_amount') {
-                    $insertable_tx_cols[] = $cname;
-                }
+        $stmt = $pdo->query("SELECT * FROM transactions LIMIT 1");
+        for ($i = 0; $i < $stmt->columnCount(); $i++) {
+            $meta = $stmt->getColumnMeta($i);
+            if (!empty($meta['name'])) {
+                $tx_columns[] = $meta['name'];
             }
         }
     } catch (Exception $e) {}
 }
 
-// --- 2. PRE-DETECT COLUMNS IN 'PRODUCTS' TABLE (PREVENTS IN-TRANSACTION FAILURES) ---
+$tx_cols_lower = array_map('strtolower', $tx_columns);
+
+function findColumn($candidates, $cols_lower, $original_cols) {
+    foreach ($candidates as $cand) {
+        $idx = array_search(strtolower($cand), $cols_lower);
+        if ($idx !== false) {
+            return $original_cols[$idx];
+        }
+    }
+    return null;
+}
+
+// Map column names in database
+$col_code = findColumn(['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code'], $tx_cols_lower, $tx_columns);
+$col_type = findColumn(['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], $tx_cols_lower, $tx_columns);
+$col_desc = findColumn(['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item'], $tx_cols_lower, $tx_columns);
+$col_cust = findColumn(['customer_name', 'customer', 'client_name', 'client', 'cust_name'], $tx_cols_lower, $tx_columns);
+$col_qty  = findColumn(['qty', 'quantity', 'qty_sold', 'count'], $tx_cols_lower, $tx_columns);
+$col_date = findColumn(['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp'], $tx_cols_lower, $tx_columns);
+$col_amt  = findColumn(['amount', 'total_amount', 'total', 'price', 'retail_price', 'subtotal'], $tx_cols_lower, $tx_columns);
+$pk_col   = $tx_columns[0] ?? 'id';
+
+// --- 2. PRE-DETECT COLUMNS IN 'PRODUCTS' TABLE ---
 $prod_qty_col = null;
 $prod_code_col = null;
 
 try {
-    $p_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE table_name = 'products'");
+    $p_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE lower(table_name) = 'products' AND table_schema = 'public'");
     $p_cols = $p_cols_stmt->fetchAll(PDO::FETCH_COLUMN);
     if (!empty($p_cols)) {
         $p_cols_lower = array_map('strtolower', $p_cols);
-        foreach (['quantity', 'remaining_qty', 'qty', 'stock'] as $qc) {
-            if (in_array($qc, $p_cols_lower)) { $prod_qty_col = $qc; break; }
-        }
-        foreach (['product_code', 'barcode', 'item_code', 'code'] as $cc) {
-            if (in_array($cc, $p_cols_lower)) { $prod_code_col = $cc; break; }
-        }
+        $prod_qty_col = findColumn(['quantity', 'remaining_qty', 'qty', 'stock'], $p_cols_lower, $p_cols);
+        $prod_code_col = findColumn(['product_code', 'barcode', 'item_code', 'code'], $p_cols_lower, $p_cols);
     }
 } catch (Exception $e) {}
 
-// Fallback column discovery for products
+// Fallback discovery for products
 if (!$prod_qty_col || !$prod_code_col) {
     try {
         $p_stmt = $pdo->query("SELECT * FROM products LIMIT 1");
@@ -99,54 +90,18 @@ if (!$prod_qty_col || !$prod_code_col) {
             $meta = $p_stmt->getColumnMeta($i);
             if ($meta && isset($meta['name'])) {
                 $cname = strtolower($meta['name']);
-                if (!$prod_qty_col && in_array($cname, ['quantity', 'remaining_qty', 'qty', 'stock'])) $prod_qty_col = $cname;
-                if (!$prod_code_col && in_array($cname, ['product_code', 'barcode', 'item_code', 'code'])) $prod_code_col = $cname;
+                if (!$prod_qty_col && in_array($cname, ['quantity', 'remaining_qty', 'qty', 'stock'])) $prod_qty_col = $meta['name'];
+                if (!$prod_code_col && in_array($cname, ['product_code', 'barcode', 'item_code', 'code'])) $prod_code_col = $meta['name'];
             }
         }
     } catch (Exception $e) {}
 }
 
-// Column matchers
-$getInsertCol = function($candidates) use ($insertable_tx_cols) {
-    foreach ($candidates as $cand) {
-        if (in_array(strtolower($cand), $insertable_tx_cols)) return $cand;
-    }
-    return null;
-};
-
-$getSelectCol = function($candidates) use ($all_tx_cols) {
-    foreach ($candidates as $cand) {
-        if (in_array(strtolower($cand), $all_tx_cols)) return $cand;
-    }
-    return null;
-};
-
-// Target insertable columns
-$col_code_ins         = $getInsertCol(['product_code', 'item_code', 'barcode', 'code']);
-$col_date_ins         = $getInsertCol(['transaction_date', 'tx_date', 'date', 'created_at']);
-$col_qty_ins          = $getInsertCol(['qty', 'quantity', 'qty_sold']);
-$col_type_ins         = $getInsertCol(['transaction_type', 'type', 'tx_type', 'remarks']);
-$col_cust_ins         = $getInsertCol(['customer_name', 'customer', 'name']);
-$col_desc_ins         = $getInsertCol(['description', 'item_name', 'details']);
-$col_amt_ins          = $getInsertCol(['amount', 'total', 'total_amount']);
-$col_retail_price_ins = $getInsertCol(['retail_price', 'selling_price', 'price']);
-$col_unit_price_ins   = $getInsertCol(['unit_price']);
-$col_buy_price_ins    = $getInsertCol(['buy_price', 'cost_price', 'cost', 'purchase_price', 'supplier_price']);
-
-// Target selectable columns
-$col_code_sel = $getSelectCol(['product_code', 'item_code', 'barcode', 'code']);
-$col_date_sel = $getSelectCol(['transaction_date', 'tx_date', 'date', 'created_at']);
-$col_qty_sel  = $getSelectCol(['qty', 'quantity', 'qty_sold']);
-$col_type_sel = $getSelectCol(['transaction_type', 'type', 'tx_type', 'remarks']);
-$col_cust_sel = $getSelectCol(['customer_name', 'customer', 'name']);
-$col_desc_sel = $getSelectCol(['description', 'item_name', 'details']);
-$col_amt_sel  = $getSelectCol(['total_amount', 'amount', 'price', 'retail_price', 'total']);
-
 // --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
 $customer_list = [];
 try {
-    if ($col_cust_sel) {
-        $c_stmt = $pdo->query("SELECT DISTINCT $col_cust_sel FROM transactions WHERE $col_cust_sel IS NOT NULL AND $col_cust_sel != ''");
+    if ($col_cust) {
+        $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != ''");
         while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
             if (!empty($row[0])) $customer_list[] = trim($row[0]);
         }
@@ -167,71 +122,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         try {
             $pdo->beginTransaction();
 
-            $fields = [];
-            $placeholders = [];
-            
-            if ($col_code_ins)         { $fields[] = $col_code_ins;         $placeholders[] = ':code'; }
-            if ($col_date_ins)         { $fields[] = $col_date_ins;         $placeholders[] = ':tdate'; }
-            if ($col_qty_ins)          { $fields[] = $col_qty_ins;          $placeholders[] = ':qty'; }
-            if ($col_type_ins)         { $fields[] = $col_type_ins;         $placeholders[] = ':ttype'; }
-            if ($col_cust_ins)         { $fields[] = $col_cust_ins;         $placeholders[] = ':cname'; }
-            if ($col_desc_ins)         { $fields[] = $col_desc_ins;         $placeholders[] = ':desc'; }
-            if ($col_amt_ins)          { $fields[] = $col_amt_ins;          $placeholders[] = ':amount'; }
-            if ($col_retail_price_ins) { $fields[] = $col_retail_price_ins; $placeholders[] = ':retail_price'; }
-            if ($col_unit_price_ins)   { $fields[] = $col_unit_price_ins;   $placeholders[] = ':unit_price'; }
-            if ($col_buy_price_ins)    { $fields[] = $col_buy_price_ins;    $placeholders[] = ':buy_price'; }
-
-            // Include any unmapped NOT NULL columns
-            foreach ($not_null_cols as $nn_col) {
-                if (!in_array($nn_col, $fields) && $nn_col !== $pk_col) {
-                    $fields[] = $nn_col;
-                    $placeholders[] = ':' . $nn_col;
-                }
-            }
-
-            $sql = "INSERT INTO transactions (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
-            $stmt = $pdo->prepare($sql);
-
             foreach ($items as $item) {
                 $barcode = trim($item['code']);
                 $qty = (int)$item['qty'];
                 $price = (float)$item['price'];
-                $buy_price = (float)($item['buy_price'] ?? 0);
                 $amount = $qty * $price;
-                $desc = $item['name'] ?? 'Product Item';
+                $desc = !empty($item['name']) ? $item['name'] : 'Product Item';
 
-                $binds = [];
-                if ($col_code_ins)         $binds[':code']         = $barcode;
-                if ($col_date_ins)         $binds[':tdate']        = $tx_date;
-                if ($col_qty_ins)          $binds[':qty']          = $qty;
-                if ($col_type_ins)         $binds[':ttype']        = $tx_type;
-                if ($col_cust_ins)         $binds[':cname']        = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
-                if ($col_desc_ins)         $binds[':desc']         = $desc;
-                if ($col_amt_ins)          $binds[':amount']       = $amount;
-                if ($col_retail_price_ins) $binds[':retail_price'] = $price;
-                if ($col_unit_price_ins)   $binds[':unit_price']   = $price;
-                if ($col_buy_price_ins)    $binds[':buy_price']    = $buy_price;
+                // Map data dynamically to existing DB columns
+                $insert_data = [];
+                if ($col_code) $insert_data[$col_code] = $barcode;
+                if ($col_date) $insert_data[$col_date] = $tx_date;
+                if ($col_qty)  $insert_data[$col_qty]  = $qty;
+                if ($col_type) $insert_data[$col_type] = $tx_type;
+                if ($col_cust) $insert_data[$col_cust] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
+                if ($col_desc) $insert_data[$col_desc] = $desc;
+                if ($col_amt)  $insert_data[$col_amt]  = $amount;
 
-                // Safely assign type-correct fallback values for Postgres
-                foreach ($not_null_cols as $nn_col) {
-                    if ($nn_col === $pk_col) continue;
-                    $p_key = ':' . $nn_col;
-                    if (!array_key_exists($p_key, $binds)) {
-                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'retail') !== false || strpos($nn_col, 'cost') !== false || strpos($nn_col, 'buy') !== false || strpos($nn_col, 'total') !== false) {
-                            $binds[$p_key] = 0.00;
-                        } elseif (strpos($nn_col, 'qty') !== false || strpos($nn_col, 'quantity') !== false) {
-                            $binds[$p_key] = $qty;
-                        } elseif (strpos($nn_col, 'date') !== false || strpos($nn_col, 'time') !== false || strpos($nn_col, 'created') !== false) {
-                            $binds[$p_key] = date('Y-m-d H:i:s');
-                        } else {
-                            $binds[$p_key] = 'N/A';
+                // Safely fill non-nullable unmapped columns with defaults
+                try {
+                    $nn_stmt = $pdo->query("
+                        SELECT column_name, data_type 
+                        FROM information_schema.columns 
+                        WHERE lower(table_name) = 'transactions' 
+                          AND table_schema = 'public' 
+                          AND is_nullable = 'NO' 
+                          AND column_default IS NULL
+                    ");
+                    while ($nn_row = $nn_stmt->fetch(PDO::FETCH_ASSOC)) {
+                        $c_name = $nn_row['column_name'];
+                        if (!array_key_exists($c_name, $insert_data) && strtolower($c_name) !== strtolower($pk_col)) {
+                            $dtype = strtolower($nn_row['data_type']);
+                            if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
+                                $insert_data[$c_name] = 0;
+                            } else {
+                                $insert_data[$c_name] = 'N/A';
+                            }
                         }
                     }
-                }
+                } catch (Exception $e) {}
 
+                // Build & execute INSERT
+                $fields = array_keys($insert_data);
+                $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
+
+                $sql = "INSERT INTO transactions (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
+                $stmt = $pdo->prepare($sql);
+
+                $binds = [];
+                foreach ($insert_data as $f => $v) {
+                    $binds[':' . $f] = $v;
+                }
                 $stmt->execute($binds);
 
-                // Safely update product stock
+                // Deduct inventory
                 if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -260,7 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 if (isset($_GET['delete_id'])) {
     $delete_id = $_GET['delete_id'];
     try {
-        $del = $pdo->prepare("DELETE FROM transactions WHERE $pk_col = ?");
+        $del = $pdo->prepare("DELETE FROM transactions WHERE {$pk_col} = ?");
         $del->execute([$delete_id]);
     } catch (Exception $e) {}
     header("Location: stockout.php");
@@ -274,18 +218,18 @@ $cash_sales_today = 0;
 $total_credit = 0;
 
 try {
-    if ($col_amt_sel && $col_date_sel && $col_type_sel) {
-        $stmt = $pdo->prepare("SELECT SUM($col_amt_sel) FROM transactions WHERE CAST($col_date_sel AS DATE) = ? AND $col_type_sel = 'Cash'");
+    if ($col_amt && $col_date && $col_type) {
+        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND {$col_type} = 'Cash'");
         $stmt->execute([$today]);
         $cash_sales_today = (float)$stmt->fetchColumn();
 
-        $stmt = $pdo->prepare("SELECT SUM($col_amt_sel) FROM transactions WHERE CAST($col_date_sel AS DATE) = ? AND $col_type_sel = 'Payment'");
+        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND {$col_type} = 'Payment'");
         $stmt->execute([$today]);
         $payment_today = (float)$stmt->fetchColumn();
 
         $total_cash_today = $cash_sales_today + $payment_today;
 
-        $stmt = $pdo->query("SELECT SUM($col_amt_sel) FROM transactions WHERE $col_type_sel = 'Credit'");
+        $stmt = $pdo->query("SELECT SUM({$col_amt}) FROM transactions WHERE {$col_type} = 'Credit'");
         $total_credit = (float)$stmt->fetchColumn();
     }
 } catch (Exception $e) {}
@@ -295,10 +239,10 @@ $products_map = [];
 try {
     $prod_stmt = $pdo->query("SELECT * FROM products");
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $code = $p['product_code'] ?? $p['barcode'] ?? $p['item_code'] ?? $p['code'] ?? null;
-        $name = $p['product_name'] ?? $p['item_name'] ?? $p['description'] ?? 'Product Item';
-        $price = $p['retail_price'] ?? $p['selling_price'] ?? $p['price'] ?? $p['unit_price'] ?? 0;
-        $buy_price = $p['buy_price'] ?? $p['cost_price'] ?? $p['cost'] ?? $p['purchase_price'] ?? 0;
+        $code = getTxVal($p, ['product_code', 'barcode', 'item_code', 'code'], null);
+        $name = getTxVal($p, ['product_name', 'item_name', 'description', 'name'], 'Product Item');
+        $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], 0);
+        $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], 0);
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
@@ -589,6 +533,7 @@ try {
             border-radius: 4px;
             font-size: 11px;
             font-weight: 600;
+            display: inline-block;
         }
 
         .action-del {
@@ -738,13 +683,13 @@ try {
                     <?php if (!empty($transactions)): ?>
                         <?php foreach ($transactions as $tx): ?>
                             <?php 
-                                $t_code = ($col_code_sel && isset($tx[$col_code_sel])) ? $tx[$col_code_sel] : ($tx['product_code'] ?? $tx['item_code'] ?? $tx['barcode'] ?? $tx['code'] ?? '-');
-                                $t_date = ($col_date_sel && isset($tx[$col_date_sel])) ? $tx[$col_date_sel] : ($tx['transaction_date'] ?? $tx['date'] ?? '-');
-                                $t_qty  = ($col_qty_sel && isset($tx[$col_qty_sel]))   ? $tx[$col_qty_sel]  : ($tx['qty'] ?? $tx['quantity'] ?? '-');
-                                $t_type = ($col_type_sel && isset($tx[$col_type_sel])) ? $tx[$col_type_sel] : ($tx['transaction_type'] ?? $tx['type'] ?? '-');
-                                $t_cust = ($col_cust_sel && isset($tx[$col_cust_sel])) ? $tx[$col_cust_sel] : ($tx['customer_name'] ?? $tx['customer'] ?? '-');
-                                $t_desc = ($col_desc_sel && isset($tx[$col_desc_sel])) ? $tx[$col_desc_sel] : ($tx['description'] ?? $tx['item_name'] ?? '-');
-                                $t_amt  = ($col_amt_sel && isset($tx[$col_amt_sel]))   ? $tx[$col_amt_sel]  : ($tx['amount'] ?? $tx['retail_price'] ?? $tx['total_amount'] ?? 0);
+                                $t_code = getTxVal($tx, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code']);
+                                $t_date = getTxVal($tx, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp']);
+                                $t_qty  = getTxVal($tx, ['qty', 'quantity', 'qty_sold', 'count']);
+                                $t_type = getTxVal($tx, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode'], 'Cash');
+                                $t_cust = getTxVal($tx, ['customer_name', 'customer', 'client_name', 'client', 'cust_name']);
+                                $t_desc = getTxVal($tx, ['description', 'product_name', 'item_name', 'desc', 'details', 'name', 'product', 'item']);
+                                $t_amt  = getTxVal($tx, ['amount', 'total_amount', 'total', 'price', 'retail_price', 'subtotal'], 0);
                                 $row_id = $tx[$pk_col] ?? reset($tx);
                             ?>
                             <tr>
@@ -752,7 +697,7 @@ try {
                                 <td><?php echo htmlspecialchars((string)$t_date); ?></td>
                                 <td><?php echo htmlspecialchars((string)$t_qty); ?></td>
                                 <td><span class="badge-type"><?php echo htmlspecialchars((string)$t_type); ?></span></td>
-                                <td><em><?php echo htmlspecialchars((string)($t_cust ?: '-')); ?></em></td>
+                                <td><em><?php echo htmlspecialchars((string)$t_cust); ?></em></td>
                                 <td><?php echo htmlspecialchars((string)$t_desc); ?></td>
                                 <td><strong>₱<?php echo number_format((float)$t_amt, 2); ?></strong></td>
                                 <td>
