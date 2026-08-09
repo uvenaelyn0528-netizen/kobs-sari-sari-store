@@ -44,8 +44,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                 // 2. Deduct inventory quantity (if not a pure payment)
                 if ($tx_type !== 'Payment') {
-                    $deductStmt = $pdo->prepare("UPDATE products SET quantity = quantity - :qty WHERE barcode = :barcode OR item_code = :barcode");
-                    $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
+                    try {
+                        $deductStmt = $pdo->prepare("
+                            UPDATE products 
+                            SET quantity = quantity - :qty 
+                            WHERE product_code = :barcode 
+                               OR barcode = :barcode 
+                               OR item_code = :barcode
+                        ");
+                        $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
+                    } catch (Exception $ex) {
+                        try {
+                            $deductStmt = $pdo->prepare("
+                                UPDATE products 
+                                SET remaining_qty = remaining_qty - :qty 
+                                WHERE product_code = :barcode OR barcode = :barcode
+                            ");
+                            $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
+                        } catch (Exception $ex2) {
+                            // Suppress deduction error to ensure transaction log completes
+                        }
+                    }
                 }
             }
 
@@ -94,15 +113,28 @@ try {
 // --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
 $products_map = [];
 try {
-    $prod_stmt = $pdo->query("SELECT barcode, item_code, item_name, selling_price FROM products");
+    // Select all columns to support flexible table schemas across environments
+    $prod_stmt = $pdo->query("SELECT * FROM products");
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $key = !empty($p['barcode']) ? $p['barcode'] : $p['item_code'];
-        $products_map[$key] = [
-            'name' => $p['item_name'],
-            'price' => (float)$p['selling_price']
-        ];
+        // Flexibly map barcode/code column
+        $code = $p['product_code'] ?? $p['barcode'] ?? $p['item_code'] ?? $p['code'] ?? null;
+        
+        // Flexibly map product name column
+        $name = $p['product_name'] ?? $p['item_name'] ?? $p['description'] ?? 'Product Item';
+        
+        // Flexibly map price column
+        $price = $p['retail_price'] ?? $p['selling_price'] ?? $p['price'] ?? 0;
+
+        if ($code !== null && trim((string)$code) !== '') {
+            $products_map[trim((string)$code)] = [
+                'name' => $name,
+                'price' => (float)$price
+            ];
+        }
     }
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    error_log("Product fetch error: " . $e->getMessage());
+}
 
 // --- FETCH RECENT TRANSACTIONS ---
 $transactions = [];
@@ -274,7 +306,7 @@ try {
             background-color: var(--primary-hover);
         }
 
-        /* --- STAGED ITEMS TABLE (MULTI-ITEM CART) --- */
+        /* --- STAGED ITEMS TABLE --- */
         .cart-box {
             margin: 15px 0;
             border: 1px solid #e2e8f0;
@@ -546,7 +578,7 @@ try {
 
     <!-- CLIENT-SIDE MULTI-SCAN & CART ENGINE -->
     <script>
-        // Database product cache for instant offline matching
+        // Loaded dynamically from products table
         const productDatabase = <?php echo json_encode($products_map); ?>;
         
         let cartItems = [];
@@ -557,7 +589,7 @@ try {
         const grandTotalDisplay = document.getElementById('grand_total_display');
         const itemsPayload = document.getElementById('items_payload');
 
-        // Allow pressing Enter in the barcode field to add immediately
+        // Execute scan addition on Enter keypress
         barcodeInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -571,7 +603,6 @@ try {
 
             if (!code) return;
 
-            // Lookup product info or default to generic item
             let name = "Scanned Item (" + code + ")";
             let price = 0.00;
 
@@ -579,13 +610,11 @@ try {
                 name = productDatabase[code].name;
                 price = parseFloat(productDatabase[code].price) || 0.00;
             } else {
-                // If price is unknown, prompt cashier or default
                 const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter price per unit:`, "0");
                 if (manualPrice === null) return;
                 price = parseFloat(manualPrice) || 0;
             }
 
-            // Check if item already exists in current transaction cart
             const existingIndex = cartItems.findIndex(item => item.code === code);
             if (existingIndex > -1) {
                 cartItems[existingIndex].qty += qty;
@@ -600,7 +629,6 @@ try {
 
             renderCart();
 
-            // Reset inputs for next consecutive scan
             barcodeInput.value = '';
             qtyInput.value = '1';
             barcodeInput.focus();
