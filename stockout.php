@@ -75,14 +75,16 @@ $getSelectCol = function($candidates) use ($all_tx_cols) {
 };
 
 // Target insertable columns
-$col_code_ins      = $getInsertCol(['product_code', 'item_code', 'barcode', 'code']);
-$col_date_ins      = $getInsertCol(['transaction_date', 'tx_date', 'date', 'created_at']);
-$col_qty_ins       = $getInsertCol(['qty', 'quantity', 'qty_sold']);
-$col_type_ins      = $getInsertCol(['transaction_type', 'type', 'tx_type', 'remarks']);
-$col_cust_ins      = $getInsertCol(['customer_name', 'customer', 'name']);
-$col_desc_ins      = $getInsertCol(['description', 'item_name', 'details']);
-$col_amt_ins       = $getInsertCol(['amount', 'price', 'unit_price', 'total', 'selling_price']);
-$col_buy_price_ins = $getInsertCol(['buy_price', 'cost_price', 'cost', 'purchase_price', 'supplier_price']);
+$col_code_ins         = $getInsertCol(['product_code', 'item_code', 'barcode', 'code']);
+$col_date_ins         = $getInsertCol(['transaction_date', 'tx_date', 'date', 'created_at']);
+$col_qty_ins          = $getInsertCol(['qty', 'quantity', 'qty_sold']);
+$col_type_ins         = $getInsertCol(['transaction_type', 'type', 'tx_type', 'remarks']);
+$col_cust_ins         = $getInsertCol(['customer_name', 'customer', 'name']);
+$col_desc_ins         = $getInsertCol(['description', 'item_name', 'details']);
+$col_amt_ins          = $getInsertCol(['amount', 'total', 'total_amount']);
+$col_retail_price_ins = $getInsertCol(['retail_price', 'selling_price', 'price']);
+$col_unit_price_ins   = $getInsertCol(['unit_price']);
+$col_buy_price_ins    = $getInsertCol(['buy_price', 'cost_price', 'cost', 'purchase_price', 'supplier_price']);
 
 // Target selectable columns for stats and history
 $col_code_sel = $getSelectCol(['product_code', 'item_code', 'barcode', 'code']);
@@ -91,7 +93,7 @@ $col_qty_sel  = $getSelectCol(['qty', 'quantity', 'qty_sold']);
 $col_type_sel = $getSelectCol(['transaction_type', 'type', 'tx_type', 'remarks']);
 $col_cust_sel = $getSelectCol(['customer_name', 'customer', 'name']);
 $col_desc_sel = $getSelectCol(['description', 'item_name', 'details']);
-$col_amt_sel  = $getSelectCol(['total_amount', 'amount', 'price', 'total']);
+$col_amt_sel  = $getSelectCol(['total_amount', 'amount', 'price', 'retail_price', 'total']);
 
 
 // --- FETCH CUSTOMER NAMES FOR DROPDOWN ---
@@ -124,14 +126,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             $fields = [];
             $placeholders = [];
             
-            if ($col_code_ins)      { $fields[] = $col_code_ins;      $placeholders[] = ':code'; }
-            if ($col_date_ins)      { $fields[] = $col_date_ins;      $placeholders[] = ':tdate'; }
-            if ($col_qty_ins)       { $fields[] = $col_qty_ins;       $placeholders[] = ':qty'; }
-            if ($col_type_ins)      { $fields[] = $col_type_ins;      $placeholders[] = ':ttype'; }
-            if ($col_cust_ins)      { $fields[] = $col_cust_ins;      $placeholders[] = ':cname'; }
-            if ($col_desc_ins)      { $fields[] = $col_desc_ins;      $placeholders[] = ':desc'; }
-            if ($col_amt_ins)       { $fields[] = $col_amt_ins;       $placeholders[] = ':amount'; }
-            if ($col_buy_price_ins) { $fields[] = $col_buy_price_ins; $placeholders[] = ':buy_price'; }
+            if ($col_code_ins)         { $fields[] = $col_code_ins;         $placeholders[] = ':code'; }
+            if ($col_date_ins)         { $fields[] = $col_date_ins;         $placeholders[] = ':tdate'; }
+            if ($col_qty_ins)          { $fields[] = $col_qty_ins;          $placeholders[] = ':qty'; }
+            if ($col_type_ins)         { $fields[] = $col_type_ins;         $placeholders[] = ':ttype'; }
+            if ($col_cust_ins)         { $fields[] = $col_cust_ins;         $placeholders[] = ':cname'; }
+            if ($col_desc_ins)         { $fields[] = $col_desc_ins;         $placeholders[] = ':desc'; }
+            if ($col_amt_ins)          { $fields[] = $col_amt_ins;          $placeholders[] = ':amount'; }
+            if ($col_retail_price_ins) { $fields[] = $col_retail_price_ins; $placeholders[] = ':retail_price'; }
+            if ($col_unit_price_ins)   { $fields[] = $col_unit_price_ins;   $placeholders[] = ':unit_price'; }
+            if ($col_buy_price_ins)    { $fields[] = $col_buy_price_ins;    $placeholders[] = ':buy_price'; }
 
             // Ensure all NOT NULL schema columns without defaults are captured in INSERT
             foreach ($not_null_cols as $nn_col) {
@@ -153,21 +157,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 $desc = $item['name'] ?? 'Product Item';
 
                 $binds = [];
-                if ($col_code_ins)      $binds[':code']      = $barcode;
-                if ($col_date_ins)      $binds[':tdate']     = $tx_date;
-                if ($col_qty_ins)       $binds[':qty']       = $qty;
-                if ($col_type_ins)      $binds[':ttype']     = $tx_type;
-                if ($col_cust_ins)      $binds[':cname']     = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
-                if ($col_desc_ins)      $binds[':desc']      = $desc;
-                if ($col_amt_ins)       $binds[':amount']    = $amount;
-                if ($col_buy_price_ins) $binds[':buy_price'] = $buy_price;
+                if ($col_code_ins)         $binds[':code']         = $barcode;
+                if ($col_date_ins)         $binds[':tdate']        = $tx_date;
+                if ($col_qty_ins)          $binds[':qty']          = $qty;
+                if ($col_type_ins)         $binds[':ttype']        = $tx_type;
+                if ($col_cust_ins)         $binds[':cname']        = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
+                if ($col_desc_ins)         $binds[':desc']         = $desc;
+                if ($col_amt_ins)          $binds[':amount']       = $amount;
+                if ($col_retail_price_ins) $binds[':retail_price'] = $price;
+                if ($col_unit_price_ins)   $binds[':unit_price']   = $price;
+                if ($col_buy_price_ins)    $binds[':buy_price']    = $buy_price;
 
                 // Provide safe default values for unhandled NOT NULL columns
                 foreach ($not_null_cols as $nn_col) {
                     $p_key = ':' . $nn_col;
                     if (!array_key_exists($p_key, $binds)) {
-                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'cost') !== false || strpos($nn_col, 'qty') !== false) {
-                            $binds[$p_key] = 0;
+                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'retail') !== false) {
+                            $binds[$p_key] = $price;
+                        } elseif (strpos($nn_col, 'cost') !== false || strpos($nn_col, 'buy') !== false) {
+                            $binds[$p_key] = $buy_price;
+                        } elseif (strpos($nn_col, 'qty') !== false) {
+                            $binds[$p_key] = $qty;
                         } else {
                             $binds[$p_key] = '';
                         }
@@ -694,7 +704,7 @@ try {
                                 $t_type = ($col_type_sel && isset($tx[$col_type_sel])) ? $tx[$col_type_sel] : ($tx['transaction_type'] ?? $tx['type'] ?? '-');
                                 $t_cust = ($col_cust_sel && isset($tx[$col_cust_sel])) ? $tx[$col_cust_sel] : ($tx['customer_name'] ?? $tx['customer'] ?? '-');
                                 $t_desc = ($col_desc_sel && isset($tx[$col_desc_sel])) ? $tx[$col_desc_sel] : ($tx['description'] ?? $tx['item_name'] ?? '-');
-                                $t_amt  = ($col_amt_sel && isset($tx[$col_amt_sel]))   ? $tx[$col_amt_sel]  : ($tx['amount'] ?? $tx['total_amount'] ?? 0);
+                                $t_amt  = ($col_amt_sel && isset($tx[$col_amt_sel]))   ? $tx[$col_amt_sel]  : ($tx['amount'] ?? $tx['retail_price'] ?? $tx['total_amount'] ?? 0);
                             ?>
                             <tr>
                                 <td><?php echo htmlspecialchars((string)$t_code); ?></td>
