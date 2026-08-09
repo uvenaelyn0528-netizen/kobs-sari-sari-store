@@ -9,12 +9,17 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- DETECT COLUMNS IN 'TRANSACTIONS' TABLE (SEPARATING INSERTABLE VS GENERATED) ---
+// --- DETECT COLUMNS IN 'TRANSACTIONS' TABLE (HANDLING GENERATED & NOT NULL CONSTRAINTS) ---
 $all_tx_cols = [];
 $insertable_tx_cols = [];
+$not_null_cols = [];
 
 try {
-    $col_stmt = $pdo->query("SELECT column_name, is_generated, is_insertable_into FROM information_schema.columns WHERE table_name = 'transactions'");
+    $col_stmt = $pdo->query("
+        SELECT column_name, is_generated, is_insertable_into, is_nullable, column_default 
+        FROM information_schema.columns 
+        WHERE table_name = 'transactions'
+    ");
     while ($row = $col_stmt->fetch(PDO::FETCH_ASSOC)) {
         $cname = strtolower($row['column_name']);
         $all_tx_cols[] = $cname;
@@ -25,6 +30,9 @@ try {
         // Exclude generated columns from insert operations
         if ($is_gen !== 'ALWAYS' && $is_ins !== 'NO' && $cname !== 'total_amount') {
             $insertable_tx_cols[] = $cname;
+            if (strtoupper($row['is_nullable']) === 'NO' && $row['column_default'] === null && $cname !== 'id') {
+                $not_null_cols[] = $cname;
+            }
         }
     }
 } catch (Exception $e) {}
@@ -67,13 +75,14 @@ $getSelectCol = function($candidates) use ($all_tx_cols) {
 };
 
 // Target insertable columns
-$col_code_ins = $getInsertCol(['product_code', 'item_code', 'barcode', 'code']);
-$col_date_ins = $getInsertCol(['transaction_date', 'tx_date', 'date', 'created_at']);
-$col_qty_ins  = $getInsertCol(['qty', 'quantity', 'qty_sold']);
-$col_type_ins = $getInsertCol(['transaction_type', 'type', 'tx_type', 'remarks']);
-$col_cust_ins = $getInsertCol(['customer_name', 'customer', 'name']);
-$col_desc_ins = $getInsertCol(['description', 'item_name', 'details']);
-$col_amt_ins  = $getInsertCol(['amount', 'price', 'unit_price', 'total']);
+$col_code_ins      = $getInsertCol(['product_code', 'item_code', 'barcode', 'code']);
+$col_date_ins      = $getInsertCol(['transaction_date', 'tx_date', 'date', 'created_at']);
+$col_qty_ins       = $getInsertCol(['qty', 'quantity', 'qty_sold']);
+$col_type_ins      = $getInsertCol(['transaction_type', 'type', 'tx_type', 'remarks']);
+$col_cust_ins      = $getInsertCol(['customer_name', 'customer', 'name']);
+$col_desc_ins      = $getInsertCol(['description', 'item_name', 'details']);
+$col_amt_ins       = $getInsertCol(['amount', 'price', 'unit_price', 'total', 'selling_price']);
+$col_buy_price_ins = $getInsertCol(['buy_price', 'cost_price', 'cost', 'purchase_price', 'supplier_price']);
 
 // Target selectable columns for stats and history
 $col_code_sel = $getSelectCol(['product_code', 'item_code', 'barcode', 'code']);
@@ -115,13 +124,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
             $fields = [];
             $placeholders = [];
             
-            if ($col_code_ins) { $fields[] = $col_code_ins; $placeholders[] = ':code'; }
-            if ($col_date_ins) { $fields[] = $col_date_ins; $placeholders[] = ':tdate'; }
-            if ($col_qty_ins)  { $fields[] = $col_qty_ins;  $placeholders[] = ':qty'; }
-            if ($col_type_ins) { $fields[] = $col_type_ins; $placeholders[] = ':ttype'; }
-            if ($col_cust_ins) { $fields[] = $col_cust_ins; $placeholders[] = ':cname'; }
-            if ($col_desc_ins) { $fields[] = $col_desc_ins; $placeholders[] = ':desc'; }
-            if ($col_amt_ins)  { $fields[] = $col_amt_ins;  $placeholders[] = ':amount'; }
+            if ($col_code_ins)      { $fields[] = $col_code_ins;      $placeholders[] = ':code'; }
+            if ($col_date_ins)      { $fields[] = $col_date_ins;      $placeholders[] = ':tdate'; }
+            if ($col_qty_ins)       { $fields[] = $col_qty_ins;       $placeholders[] = ':qty'; }
+            if ($col_type_ins)      { $fields[] = $col_type_ins;      $placeholders[] = ':ttype'; }
+            if ($col_cust_ins)      { $fields[] = $col_cust_ins;      $placeholders[] = ':cname'; }
+            if ($col_desc_ins)      { $fields[] = $col_desc_ins;      $placeholders[] = ':desc'; }
+            if ($col_amt_ins)       { $fields[] = $col_amt_ins;       $placeholders[] = ':amount'; }
+            if ($col_buy_price_ins) { $fields[] = $col_buy_price_ins; $placeholders[] = ':buy_price'; }
+
+            // Ensure all NOT NULL schema columns without defaults are captured in INSERT
+            foreach ($not_null_cols as $nn_col) {
+                if (!in_array($nn_col, $fields)) {
+                    $fields[] = $nn_col;
+                    $placeholders[] = ':' . $nn_col;
+                }
+            }
 
             $sql = "INSERT INTO transactions (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
             $stmt = $pdo->prepare($sql);
@@ -130,17 +148,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 $barcode = trim($item['code']);
                 $qty = (int)$item['qty'];
                 $price = (float)$item['price'];
+                $buy_price = (float)($item['buy_price'] ?? 0);
                 $amount = $qty * $price;
                 $desc = $item['name'] ?? 'Product Item';
 
                 $binds = [];
-                if ($col_code_ins) $binds[':code']  = $barcode;
-                if ($col_date_ins) $binds[':tdate'] = $tx_date;
-                if ($col_qty_ins)  $binds[':qty']   = $qty;
-                if ($col_type_ins) $binds[':ttype'] = $tx_type;
-                if ($col_cust_ins) $binds[':cname'] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
-                if ($col_desc_ins) $binds[':desc']  = $desc;
-                if ($col_amt_ins)  $binds[':amount'] = $amount;
+                if ($col_code_ins)      $binds[':code']      = $barcode;
+                if ($col_date_ins)      $binds[':tdate']     = $tx_date;
+                if ($col_qty_ins)       $binds[':qty']       = $qty;
+                if ($col_type_ins)      $binds[':ttype']     = $tx_type;
+                if ($col_cust_ins)      $binds[':cname']     = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null;
+                if ($col_desc_ins)      $binds[':desc']      = $desc;
+                if ($col_amt_ins)       $binds[':amount']    = $amount;
+                if ($col_buy_price_ins) $binds[':buy_price'] = $buy_price;
+
+                // Provide safe default values for unhandled NOT NULL columns
+                foreach ($not_null_cols as $nn_col) {
+                    $p_key = ':' . $nn_col;
+                    if (!array_key_exists($p_key, $binds)) {
+                        if (strpos($nn_col, 'price') !== false || strpos($nn_col, 'amt') !== false || strpos($nn_col, 'cost') !== false || strpos($nn_col, 'qty') !== false) {
+                            $binds[$p_key] = 0;
+                        } else {
+                            $binds[$p_key] = '';
+                        }
+                    }
+                }
 
                 $stmt->execute($binds);
 
@@ -219,12 +251,14 @@ try {
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
         $code = $p['product_code'] ?? $p['barcode'] ?? $p['item_code'] ?? $p['code'] ?? null;
         $name = $p['product_name'] ?? $p['item_name'] ?? $p['description'] ?? 'Product Item';
-        $price = $p['retail_price'] ?? $p['selling_price'] ?? $p['price'] ?? 0;
+        $price = $p['retail_price'] ?? $p['selling_price'] ?? $p['price'] ?? $p['unit_price'] ?? 0;
+        $buy_price = $p['buy_price'] ?? $p['cost_price'] ?? $p['cost'] ?? $p['purchase_price'] ?? 0;
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
-                'name'  => $name,
-                'price' => (float)$price
+                'name'      => $name,
+                'price'     => (float)$price,
+                'buy_price' => (float)$buy_price
             ];
         }
     }
@@ -711,12 +745,14 @@ try {
 
             let name = "Scanned Item (" + code + ")";
             let price = 0.00;
+            let buyPrice = 0.00;
 
             if (productDatabase[code]) {
                 name = productDatabase[code].name;
                 price = parseFloat(productDatabase[code].price) || 0.00;
+                buyPrice = parseFloat(productDatabase[code].buy_price) || 0.00;
             } else {
-                const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter price per unit:`, "0");
+                const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter selling price per unit:`, "0");
                 if (manualPrice === null) return;
                 price = parseFloat(manualPrice) || 0;
             }
@@ -729,6 +765,7 @@ try {
                     code: code,
                     name: name,
                     price: price,
+                    buy_price: buyPrice,
                     qty: qty
                 });
             }
