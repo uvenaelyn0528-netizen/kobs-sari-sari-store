@@ -1,598 +1,640 @@
 <?php
+// Enable error reporting
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+session_start();
 require_once 'db.php';
-include 'header.php';
 
-// Ensure session is started and check if user role is allowed (admin or tindera)
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
+$today = date('Y-m-d');
+
+// --- HANDLE BATCH TRANSACTION SUBMISSION ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
+    $tx_type = $_POST['tx_type'] ?? 'Cash';
+    $customer_name = $_POST['customer_name'] ?? null;
+    $tx_date = $_POST['tx_date'] ?? $today;
+    $items_raw = $_POST['items_payload'] ?? '[]';
+    $items = json_decode($items_raw, true);
+
+    if (!empty($items) && is_array($items)) {
+        try {
+            $pdo->beginTransaction();
+
+            foreach ($items as $item) {
+                $barcode = trim($item['code']);
+                $qty = (int)$item['qty'];
+                $price = (float)$item['price'];
+                $amount = $qty * $price;
+                $desc = $item['name'] ?? 'Product Item';
+
+                // 1. Insert into transactions table
+                $stmt = $pdo->prepare("
+                    INSERT INTO transactions (code, transaction_date, qty, transaction_type, customer_name, description, amount)
+                    VALUES (:code, :tdate, :qty, :ttype, :cname, :desc, :amount)
+                ");
+                $stmt->execute([
+                    ':code' => $barcode,
+                    ':tdate' => $tx_date,
+                    ':qty' => $qty,
+                    ':ttype' => $tx_type,
+                    ':cname' => ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : null,
+                    ':desc' => $desc,
+                    ':amount' => $amount
+                ]);
+
+                // 2. Deduct inventory quantity (if not a pure payment)
+                if ($tx_type !== 'Payment') {
+                    $deductStmt = $pdo->prepare("UPDATE products SET quantity = quantity - :qty WHERE barcode = :barcode OR item_code = :barcode");
+                    $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
+                }
+            }
+
+            $pdo->commit();
+            header("Location: stockout.php?success=1");
+            exit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $error_message = "Transaction failed: " . $e->getMessage();
+        }
+    } else {
+        $error_message = "No items scanned in the transaction cart.";
+    }
 }
 
-$user_role = $_SESSION['role'] ?? '';
-$is_authorized = in_array(strtolower($user_role), ['admin', 'tindera']);
-
-$message = '';
-$message_type = '';
-
-// Complete master list of customers
-$master_customer_list = [
-    "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
-    "Aguilo, Kim", "Aguindao, Omar", "Albia, Jhonmark", "Amoguis, Joshua Rheynaird", 
-    "Ansing, Arje", "Ansing, Jose", "Araño, Ronelo", "Aromin, Dan Alekhine", 
-    "Arroyo, Olcen", "Asuncion, Jonathan", "Badinas, Pedro", "Baguinon, Mark Aldrin", 
-    "Balasa, Harvey", "Balbalang, Manny", "Baldicañas, Manuel", "Ballesteros, Emilio", 
-    "Bambico, Michael", "Barlomento, Mark Anthony", "Beracis, Greg", "Bermudez, Liezel", 
-    "Bonao, Ronald", "Borabod, Rogelio", "Bulawan, Mervin", "Caberio, Aljun", 
-    "Caberio, John Angelo", "Calista, Ralph John", "Campo, Ederlito", "Cang, Eric", 
-    "Canor, Arniel", "Capagalan, Nico", "Carabio, Dindo", "Caranyagan, Romeo", 
-    "Casaña, Roger", "Catamora, Jounysis", "Codaste, Dino", "Colinares, Drexell John", 
-    "Cordiner, Ryan Lyn", "Corpo (Peter, Marlo, Timot)", "Corpo (Kevin, Kelly & Dan)", 
-    "Corpo (Dexil, Lingatong and others)", "Corpo (Kevin & Junmar)", "Cruz, Rolliber", 
-    "Cuaresma, Jemson", "Dado, Eric", "Dadsa-ag, Peter Paul", "Daganio, Denmark", 
-    "Daganio, Janus", "Daiz, Jhon Carlo", "Damage", "Daño, Juven", "Dapo, Angelo", 
-    "Dela Cruz, Flordeliza", "Delalamon, Jovani", "Delfinado, Velcar", "Delos Santos, Jessy", 
-    "Deloso, Rotchell", "Deocampo, Junlie", "Diez, Jems", "Doblon, Mario Francis", 
-    "Dolorosa, Jerwen", "Dorimon, Wilson", "Dulfo, Erika Loren", "Ebano, Joseph", 
-    "Elegado, Bernard", "Ensalada, Dionisio", "Enson, George", "Ercillo, Ersal", 
-    "Escobal, Mark Jorel", "Espino, Apple", "Florante, Isaias", "Flores, Juancho", 
-    "Formilles, Jerry", "Gagabuan, Arjay", "Gagujas, Marlou", "Gajol, Ginalyn", 
-    "Garcia, Benny", "Genelaso, Elmer", "Gingco, Bhert Joy", "Golloso, Raymond", 
-    "Guiao, Ashley", "Guimbaolibot, Jayson Anthony", "Hombria, Nestor", "Iligan, Rolly", 
-    "Jimenez, Aljon", "Juntilla, Ranel", "Juros, Jessie", "Kobelco Junmar", 
-    "Kobelco kelly", "Kobelco kevin", "Labotap, Reggie", "Laconsay, Kevin", 
-    "Lazo, Mark Anthony", "Lingatong, Albert", "Lipranon, Jomar", "Lisondra, Dennis", 
-    "Llemos, John Marvic", "Logroño, Gerundio", "Longatan, Mark Foustere", 
-    "Macabalo, Adrian", "Macabenta, Jesreel", "Macabenta, Jessie", "Maque, Juluis", 
-    "Mara, Pedro", "Marquito, Edwin", "Melendez, Duddy", "Monoy, Louien", 
-    "Napoles, Aileen", "Ogrimen, Nonito", "Olasiman, Reynante", "Oliver, Nico", 
-    "Ollay, Arnel", "Omapas, Antonino", "Omoso, Jing", "Orongan, Romel", 
-    "Orongan, Jay", "Ortillo, Francisco", "Ortillo, Rico", "Pabelonia, Peter Jeffrey", 
-    "Padriquez, Ronie", "Padual, Benjie", "Padulaga, Roldan", "Pagatpatan, Salvacion", 
-    "Panungcat, Desiderio", "Parco, RV Niño", "Pelenio, Evelyn", "Picardal, Baldomero", 
-    "Pinggoy, Ranil", "Pingos, Jovel", "Porton, Ronnel", "Princillo, Ramil", 
-    "Quimbo,", "Ramayramay, Jonathan", "Regajal, Rolando", "Reyes, Ricky", 
-    "Rivera, Aldrin", "Rodolfo, Fernando", "Rosal, Napoleon", "Sabas, Jeffrey", 
-    "Saga, Rezniel", "Saldivar, Jeamboy", "Salve, Levi", "Sandoval, Erwin", 
-    "Santos, Mark James", "Saylag, Kieth", "Sia, Amor", "Sidaya, Jannel", 
-    "Somoray, Rogelio", "Sulapas, Justine", "Taguba, Glenn", "Tarpin, Ma. Andrea", 
-    "Tejero, Mark Anthony", "Tubil, Romeo", "Uveña, Elyn", "Uveña, Mario", 
-    "Villarosa, Reynan Dave", "Yurong, Edmon"
-];
-sort($master_customer_list);
-
-// Handle Deletion (Restricted to Admin/Tindera)
+// --- HANDLE DELETION ---
 if (isset($_GET['delete_id'])) {
-    if (!$is_authorized) {
-        $message = "Access Denied: You do not have permission to delete transactions.";
-        $message_type = "error";
-    } else {
-        $del_id = intval($_GET['delete_id']);
-        try {
-            $st_stmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
-            $st_stmt->execute([$del_id]);
-            $tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($tx) {
-                if ($tx['product_code'] !== '-' && !empty($tx['product_code'])) {
-                    $revProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ?, \"Stock_out\" = \"Stock_out\" - ? WHERE product_code = ?");
-                    $revProd->execute([$tx['qty_sold'], $tx['qty_sold'], $tx['product_code']]);
-                }
-
-                if (!empty($tx['customer_name'])) {
-                    $c_name = $tx['customer_name'];
-                    $chkC = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
-                    $chkC->execute([$c_name]);
-                    $c_data = $chkC->fetch(PDO::FETCH_ASSOC);
-
-                    if ($c_data) {
-                        if ($tx['remarks'] === 'Credit') {
-                            $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
-                            $new_bal = $new_credit - floatval($c_data['total_payment']);
-                            $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                            $updC->execute([$new_credit, $new_bal, $c_name]);
-                        } elseif ($tx['remarks'] === 'Payment') {
-                            $new_pay = floatval($c_data['total_payment']) - floatval($tx['total_amount']);
-                            $new_bal = floatval($c_data['store_credit']) - $new_pay;
-                            $updC = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?");
-                            $updC->execute([$new_pay, $new_bal, $c_name]);
-                        } elseif ($tx['remarks'] === 'Balance') {
-                            $new_credit = floatval($c_data['store_credit']) - floatval($tx['total_amount']);
-                            $new_bal = $new_credit - floatval($c_data['total_payment']);
-                            $updC = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                            $updC->execute([$new_credit, $new_bal, $c_name]);
-                        }
-                    }
-                }
-
-                $delStmt = $pdo->prepare("DELETE FROM stockouts WHERE id = ?");
-                $delStmt->execute([$del_id]);
-
-                $message = "Transaction deleted and inventory/ledger successfully reverted.";
-                $message_type = "success";
-            }
-        } catch (Exception $e) {
-            $message = "Error deleting transaction: " . $e->getMessage();
-            $message_type = "error";
-        }
-    }
+    $delete_id = (int)$_GET['delete_id'];
+    $del = $pdo->prepare("DELETE FROM transactions WHERE id = ?");
+    $del->execute([$delete_id]);
+    header("Location: stockout.php");
+    exit();
 }
 
-// Handle Form Submission (Add or Edit) (Restricted to Admin/Tindera)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_stockout'])) {
-    if (!$is_authorized) {
-        $message = "Access Denied: You do not have permission to process transactions.";
-        $message_type = "error";
-    } else {
-        $edit_id       = intval($_POST['edit_id'] ?? 0);
-        $product_code  = trim($_POST['product_code'] ?? '');
-        $qty_sold      = intval($_POST['qty_sold'] ?? 0);
-        $remarks       = $_POST['remarks'] ?? 'Cash';
-        $customer_name = trim($_POST['customer_name'] ?? '');
-        $date_sold     = $_POST['date_sold'] ?? date('Y-m-d');
-        $custom_amount = floatval($_POST['custom_amount'] ?? 0);
+// --- FETCH DASHBOARD TOTALS ---
+$total_cash_today = 0;
+$payment_today = 0;
+$cash_sales_today = 0;
+$total_credit = 0;
 
-        try {
-            if ($edit_id > 0) {
-                $st_stmt = $pdo->prepare("SELECT * FROM stockouts WHERE id = ?");
-                $st_stmt->execute([$edit_id]);
-                $old_tx = $st_stmt->fetch(PDO::FETCH_ASSOC);
-
-                if ($old_tx) {
-                    if ($old_tx['product_code'] !== '-' && !empty($old_tx['product_code'])) {
-                        $revProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty + ?, \"Stock_out\" = \"Stock_out\" - ? WHERE product_code = ?");
-                        $revProd->execute([$old_tx['qty_sold'], $old_tx['qty_sold'], $old_tx['product_code']]);
-                    }
-                    if (!empty($old_tx['customer_name'])) {
-                        $c_name = $old_tx['customer_name'];
-                        $chkC = $pdo->prepare("SELECT store_credit, total_payment FROM credits WHERE customer_name = ?");
-                        $chkC->execute([$c_name]);
-                        $c_data = $chkC->fetch(PDO::FETCH_ASSOC);
-                        if ($c_data) {
-                            if ($old_tx['remarks'] === 'Credit') {
-                                $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
-                                $nb = $nc - floatval($c_data['total_payment']);
-                                $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
-                            } elseif ($old_tx['remarks'] === 'Payment') {
-                                $np = floatval($c_data['total_payment']) - floatval($old_tx['total_amount']);
-                                $nb = floatval($c_data['store_credit']) - $np;
-                                $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ? WHERE customer_name = ?")->execute([$np, $nb, $c_name]);
-                            } elseif ($old_tx['remarks'] === 'Balance') {
-                                $nc = floatval($c_data['store_credit']) - floatval($old_tx['total_amount']);
-                                $nb = $nc - floatval($c_data['total_payment']);
-                                $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?")->execute([$nc, $nb, $c_name]);
-                            }
-                        }
-                    }
-                    $pdo->prepare("DELETE FROM stockouts WHERE id = ?")->execute([$edit_id]);
-                }
-            }
-
-            if ($remarks === 'Payment' || $remarks === 'Balance') {
-                if (empty($customer_name)) {
-                    throw new Exception("Please select a customer name for this transaction.");
-                }
-
-                $total_amount = $custom_amount;
-                $product_name = ($remarks === 'Payment') ? 'Customer Account Payment' : 'Customer Opening Balance';
-                $category     = 'Credit Ledger';
-
-                $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                $insertStmt->execute(['-', $date_sold, 0, $remarks, $customer_name, $product_name, $category, $total_amount]);
-
-                $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
-                $checkCust->execute([$customer_name]);
-                $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
-
-                if ($remarks === 'Payment') {
-                    if ($exists) {
-                        $new_payment = floatval($exists['total_payment']) + $total_amount;
-                        $new_balance = floatval($exists['store_credit']) - $new_payment;
-                        $upd = $pdo->prepare("UPDATE credits SET total_payment = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
-                        $upd->execute([$new_payment, $new_balance, $customer_name]);
-                    } else {
-                        $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, 0.00, ?, ?)");
-                        $upd->execute([$customer_name, $total_amount, -$total_amount]);
-                    }
-                } else { // Balance
-                    if ($exists) {
-                        $new_credit = floatval($exists['store_credit']) + $total_amount;
-                        $new_balance = $new_credit - floatval($exists['total_payment']);
-                        $upd = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE customer_name = ?");
-                        $upd->execute([$new_credit, $new_balance, $customer_name]);
-                    } else {
-                        $upd = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
-                        $upd->execute([$customer_name, $total_amount, $total_amount]);
-                    }
-                }
-
-                $message = "Ledger transaction saved successfully!";
-                $message_type = "success";
-
-            } else {
-                if (empty($product_code) || $qty_sold <= 0) {
-                    throw new Exception("Please provide a valid product code and quantity.");
-                }
-
-                $stmt = $pdo->prepare("SELECT * FROM products WHERE product_code = ?");
-                $stmt->execute([$product_code]);
-                $product = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if ($product) {
-                    $total_amount = $qty_sold * floatval($product['retail_price']);
-                    
-                    $insertStmt = $pdo->prepare("INSERT INTO stockouts (product_code, date_sold, qty_sold, remarks, customer_name, product_name, category, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                    $insertStmt->execute([
-                        $product_code, 
-                        $date_sold, 
-                        $qty_sold, 
-                        $remarks, 
-                        ($remarks === 'Credit' ? $customer_name : ''), 
-                        $product['product_name'], 
-                        $product['category'], 
-                        $total_amount
-                    ]);
-
-                    $updateProd = $pdo->prepare("UPDATE products SET stock_qty = stock_qty - ?, \"Stock_out\" = \"Stock_out\" + ? WHERE product_code = ?");
-                    $updateProd->execute([$qty_sold, $qty_sold, $product_code]);
-
-                    if ($remarks === 'Credit' && !empty($customer_name)) {
-                        $checkCust = $pdo->prepare("SELECT id, store_credit, total_payment FROM credits WHERE customer_name = ?");
-                        $checkCust->execute([$customer_name]);
-                        $exists = $checkCust->fetch(PDO::FETCH_ASSOC);
-
-                        if ($exists) {
-                            $new_credit = floatval($exists['store_credit']) + $total_amount;
-                            $new_balance = $new_credit - floatval($exists['total_payment']);
-                            $updateCredit = $pdo->prepare("UPDATE credits SET store_credit = ?, total_balance = ? WHERE customer_name = ?");
-                            $updateCredit->execute([$new_credit, $new_balance, $customer_name]);
-                        } else {
-                            $insertCredit = $pdo->prepare("INSERT INTO credits (customer_name, store_credit, total_payment, total_balance) VALUES (?, ?, 0.00, ?)");
-                            $insertCredit->execute([$customer_name, $total_amount, $total_amount]);
-                        }
-                    }
-
-                    $message = "Stockout transaction saved successfully!";
-                    $message_type = "success";
-                } else {
-                    throw new Exception("Product barcode not found in inventory.");
-                }
-            }
-        } catch (Exception $e) {
-            $message = "Error: " . $e->getMessage();
-            $message_type = "error";
-        }
-    }
-}
-
-// Fetch Data & Totals
 try {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS stockouts (
-        id SERIAL PRIMARY KEY,
-        product_code VARCHAR(100),
-        date_sold DATE DEFAULT CURRENT_DATE,
-        qty_sold INT DEFAULT 0,
-        remarks VARCHAR(50) DEFAULT 'Cash',
-        customer_name VARCHAR(255),
-        product_name VARCHAR(255),
-        category VARCHAR(255),
-        total_amount NUMERIC(10,2) DEFAULT 0.00
-    )");
+    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Cash'");
+    $stmt->execute([$today]);
+    $cash_sales_today = (float)$stmt->fetchColumn();
 
-    $pdo->exec("CREATE TABLE IF NOT EXISTS credits (
-        id SERIAL PRIMARY KEY,
-        customer_name VARCHAR(255) NOT NULL UNIQUE,
-        store_credit NUMERIC(10,2) DEFAULT 0.00,
-        total_payment NUMERIC(10,2) DEFAULT 0.00,
-        total_balance NUMERIC(10,2) DEFAULT 0.00,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
+    $stmt = $pdo->prepare("SELECT SUM(amount) FROM transactions WHERE transaction_date = ? AND transaction_type = 'Payment'");
+    $stmt->execute([$today]);
+    $payment_today = (float)$stmt->fetchColumn();
 
-    $today = date('Y-m-d');
+    $total_cash_today = $cash_sales_today + $payment_today;
 
-    $sumSalesToday = $pdo->prepare("SELECT SUM(total_amount) as total_sales FROM stockouts WHERE remarks IN ('Cash', 'Payment') AND date_sold = ?");
-    $sumSalesToday->execute([$today]);
-    $total_sales_today = $sumSalesToday->fetch(PDO::FETCH_ASSOC)['total_sales'] ?? 0;
+    $stmt = $pdo->query("SELECT SUM(amount) FROM transactions WHERE transaction_type = 'Credit'");
+    $total_credit = (float)$stmt->fetchColumn();
+} catch (Exception $e) {}
 
-    $sumPaymentToday = $pdo->prepare("SELECT SUM(total_amount) as total_payment FROM stockouts WHERE remarks = 'Payment' AND date_sold = ?");
-    $sumPaymentToday->execute([$today]);
-    $total_payment_today = $sumPaymentToday->fetch(PDO::FETCH_ASSOC)['total_payment'] ?? 0;
+// --- FETCH PRODUCT LIST FOR BARCODE RESOLUTION ---
+$products_map = [];
+try {
+    $prod_stmt = $pdo->query("SELECT barcode, item_code, item_name, selling_price FROM products");
+    while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $key = !empty($p['barcode']) ? $p['barcode'] : $p['item_code'];
+        $products_map[$key] = [
+            'name' => $p['item_name'],
+            'price' => (float)$p['selling_price']
+        ];
+    }
+} catch (Exception $e) {}
 
-    $sumCashToday = $pdo->prepare("SELECT SUM(total_amount) as total_cash FROM stockouts WHERE remarks = 'Cash' AND date_sold = ?");
-    $sumCashToday->execute([$today]);
-    $total_cash_today = $sumCashToday->fetch(PDO::FETCH_ASSOC)['total_cash'] ?? 0;
-
-    $sumCredit = $pdo->query("SELECT SUM(total_amount) as total_credit FROM stockouts WHERE remarks IN ('Credit', 'Balance')");
-    $total_credit_res = $sumCredit->fetch(PDO::FETCH_ASSOC)['total_credit'] ?? 0;
-
-    $stmt = $pdo->query("SELECT * FROM stockouts WHERE remarks NOT ILIKE '%lending%' ORDER BY id DESC LIMIT 100");
-    $stockouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-} catch (PDOException $e) {
-    $total_sales_today = 0;
-    $total_payment_today = 0;
-    $total_cash_today = 0;
-    $total_credit_res = 0;
-    $stockouts = [];
-}
+// --- FETCH RECENT TRANSACTIONS ---
+$transactions = [];
+try {
+    $tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY id DESC LIMIT 50");
+    $transactions = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
 ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KOBS COOP - Stock Out & POS</title>
+    <style>
+        :root {
+            --primary-blue: #4f46e5;
+            --primary-hover: #4338ca;
+            --card-border: #e2e8f0;
+            --text-dark: #1e293b;
+            --text-muted: #64748b;
+        }
 
-<div class="container mx-auto px-4 py-8">
-    
-    <!-- Title Section & Back Button -->
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-800">KOBS Sari-Sari Store Transactions</h1>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f1f5f9;
+            margin: 0;
+            padding: 20px;
+            color: var(--text-dark);
+        }
+
+        /* --- STAT SUMMARY CARDS --- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            border-top: 5px solid transparent;
+        }
+
+        .stat-card.yellow { border-top-color: #eab308; }
+        .stat-card.green { border-top-color: #22c55e; }
+        .stat-card.blue { border-top-color: #3b82f6; }
+        .stat-card.orange { border-top-color: #f97316; }
+
+        .stat-card .title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .stat-card .amount {
+            font-size: 24px;
+            font-weight: 800;
+        }
+
+        .stat-card.yellow .amount { color: #854d0e; }
+        .stat-card.green .amount { color: #15803d; }
+        .stat-card.blue .amount { color: #1d4ed8; }
+        .stat-card.orange .amount { color: #c2410c; }
+
+        /* --- MAIN SPLIT CONTAINER --- */
+        .main-container {
+            display: grid;
+            grid-template-columns: 420px 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+
+        .panel-card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            border: 1px solid var(--card-border);
+        }
+
+        .panel-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 18px 0;
+            color: var(--text-dark);
+        }
+
+        /* --- FORM STYLING --- */
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 6px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 9px 12px;
+            border: 1.5px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 13px;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-blue);
+        }
+
+        .scan-row {
+            display: grid;
+            grid-template-columns: 1fr 80px 45px;
+            gap: 8px;
+            align-items: end;
+        }
+
+        .add-btn {
+            background-color: var(--primary-blue);
+            color: white;
+            border: none;
+            height: 38px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .add-btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        /* --- STAGED ITEMS TABLE (MULTI-ITEM CART) --- */
+        .cart-box {
+            margin: 15px 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f8fafc;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        .cart-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .cart-table th {
+            background: #e2e8f0;
+            padding: 8px 10px;
+            text-align: left;
+            font-weight: 700;
+            font-size: 11px;
+            color: #475569;
+        }
+
+        .cart-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #e2e8f0;
+            background: white;
+        }
+
+        .cart-delete-btn {
+            background: #fee2e2;
+            color: #ef4444;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            padding: 2px 6px;
+        }
+
+        /* --- SUMMARY & ACTION --- */
+        .cart-summary {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .cart-summary .label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #1e40af;
+        }
+
+        .cart-summary .total-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: #1e3a8a;
+        }
+
+        .process-btn {
+            width: 100%;
+            background-color: #4f46e5;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .process-btn:hover {
+            background-color: #4338ca;
+        }
+
+        /* --- TRANSACTION HISTORY TABLE --- */
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+
+        .history-table th {
+            background-color: #fef9c3;
+            color: #713f12;
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .history-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .badge-type {
+            background-color: #dcfce7;
+            color: #15803d;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .action-del {
+            color: #ef4444;
+            text-decoration: none;
+            font-size: 11px;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- TOP TOTAL SUMMARY CARDS -->
+    <div class="stats-grid">
+        <div class="stat-card yellow">
+            <div class="title">Total Cash On Hand (Today)</div>
+            <div class="amount">₱<?php echo number_format($total_cash_today, 2); ?></div>
         </div>
-        <div>
-            <a href="store.php" class="inline-flex items-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-semibold shadow-sm transition text-sm">
-                &larr; Back to Store
-            </a>
+        <div class="stat-card green">
+            <div class="title">Payment For Today</div>
+            <div class="amount">₱<?php echo number_format($payment_today, 2); ?></div>
+        </div>
+        <div class="stat-card blue">
+            <div class="title">Cash Sales (Today)</div>
+            <div class="amount">₱<?php echo number_format($cash_sales_today, 2); ?></div>
+        </div>
+        <div class="stat-card orange">
+            <div class="title">Total Credit Accumulation</div>
+            <div class="amount">₱<?php echo number_format($total_credit, 2); ?></div>
         </div>
     </div>
 
-    <?php if (!empty($message)): ?>
-        <div class="mb-4 p-3 rounded <?= $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>">
-            <?= htmlspecialchars($message) ?>
-        </div>
-    <?php endif; ?>
-
-    <!-- Summary Header Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <div class="bg-white p-4 rounded-xl shadow-md border-l-4 border-yellow-500">
-            <p class="text-xs font-semibold text-gray-500 uppercase">Total Cash on Hand (Today)</p>
-            <h3 class="text-2xl font-extrabold text-gray-800 mt-1">₱<?= number_format($total_sales_today, 2) ?></h3>
-        </div>
-        <div class="bg-white p-4 rounded-xl shadow-md border-l-4 border-green-500">
-            <p class="text-xs font-semibold text-gray-500 uppercase">Payment for Today</p>
-            <h3 class="text-2xl font-extrabold text-green-700 mt-1">₱<?= number_format($total_payment_today, 2) ?></h3>
-        </div>
-        <div class="bg-white p-4 rounded-xl shadow-md border-l-4 border-blue-500">
-            <p class="text-xs font-semibold text-gray-500 uppercase">Cash Sales (Today)</p>
-            <h3 class="text-2xl font-extrabold text-blue-700 mt-1">₱<?= number_format($total_cash_today, 2) ?></h3>
-        </div>
-        <div class="bg-white p-4 rounded-xl shadow-md border-l-4 border-orange-500">
-            <p class="text-xs font-semibold text-gray-500 uppercase">Total Credit Accumulation (Credit + Balance)</p>
-            <h3 class="text-2xl font-extrabold text-orange-600 mt-1">₱<?= number_format($total_credit_res, 2) ?></h3>
-        </div>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- New Stockout Form -->
-        <div class="bg-white p-6 rounded-xl shadow-md h-fit">
-            <div class="flex justify-between items-center mb-4">
-                <h2 id="formTitle" class="text-lg font-bold text-gray-800">Record Transaction</h2>
-                <a href="stockout.php" id="cancelEditBtn" class="hidden text-xs text-red-600 font-semibold underline">Cancel Edit</a>
-            </div>
+    <!-- MAIN TWO-COLUMN WORKSPACE -->
+    <div class="main-container">
+        
+        <!-- LEFT: MULTI-ITEM SCANNER & TRANSACTION BUILDER -->
+        <div class="panel-card">
+            <h2 class="panel-title">Record Transaction</h2>
             
-            <?php if (!$is_authorized): ?>
-                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
-                    <p class="font-bold">Viewer Mode</p>
-                    <p>Your account role (<?= htmlspecialchars($user_role ?: 'Guest') ?>) does not have permission to process transactions.</p>
-                </div>
-            <?php endif; ?>
+            <form id="transactionForm" method="POST" action="stockout.php">
+                <input type="hidden" name="process_batch_transaction" value="1">
+                <input type="hidden" name="items_payload" id="items_payload" value="[]">
 
-            <form method="POST" class="space-y-4" id="transactionForm">
-                <input type="hidden" name="edit_id" id="edit_id" value="0">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Transaction Type</label>
-                    <select name="remarks" id="transactionType" onchange="handleTransactionChange(this.value)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" <?= !$is_authorized ? 'disabled' : '' ?>>
+                <div class="form-group">
+                    <label>Transaction Type</label>
+                    <select name="tx_type" id="tx_type" class="form-control" onchange="toggleCustomerField()">
                         <option value="Cash">Cash</option>
                         <option value="Credit">Credit</option>
                         <option value="Payment">Payment</option>
-                        <option value="Balance">Balance</option>
                     </select>
                 </div>
 
-                <!-- Product Fields -->
-                <div id="productFields">
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700">Product Barcode / Code</label>
-                        <input type="text" id="scan_code" name="product_code" placeholder="Scan barcode or type code" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Quantity Sold</label>
-                        <input type="number" name="qty_sold" id="qtySoldInput" value="1" min="1" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
+                <div class="form-group" id="customer_group" style="display: none;">
+                    <label>Customer Name</label>
+                    <input type="text" name="customer_name" class="form-control" placeholder="Enter customer name">
+                </div>
+
+                <!-- SCAN BARCODE / CODE ROW -->
+                <div class="form-group">
+                    <label>Product Barcode / Code</label>
+                    <div class="scan-row">
+                        <input type="text" id="barcode_input" class="form-control" placeholder="Scan barcode or enter code" autofocus autocomplete="off">
+                        <div>
+                            <input type="number" id="qty_input" class="form-control" value="1" min="1">
+                        </div>
+                        <button type="button" class="add-btn" onclick="addItemFromScan()" title="Add to transaction">+</button>
                     </div>
                 </div>
 
-                <!-- Custom Amount Field -->
-                <div id="amountFieldContainer" class="hidden">
-                    <label class="block text-sm font-medium text-gray-700" id="amountLabel">Amount (₱)</label>
-                    <input type="number" step="0.01" name="custom_amount" id="customAmountInput" value="0.00" min="0" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
+                <!-- SCANNED ITEMS CART LIST -->
+                <div class="cart-box">
+                    <table class="cart-table">
+                        <thead>
+                            <tr>
+                                <th>Item / Code</th>
+                                <th style="width: 40px;">Qty</th>
+                                <th style="width: 65px;">Price</th>
+                                <th style="width: 75px;">Subtotal</th>
+                                <th style="width: 25px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="cart_body">
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
 
-                <!-- Customer Field -->
-                <div id="customerFieldContainer" class="hidden">
-                    <label class="block text-sm font-medium text-gray-700">Customer Name</label>
-                    <select name="customer_name" id="customerSelect" onchange="handleCustomerSelectChange(this)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" <?= !$is_authorized ? 'disabled' : '' ?>>
-                        <option value="">-- Select Customer --</option>
-                        <option value="ADD_NEW" class="font-bold text-indigo-600">+ Add New Customer...</option>
-                        <?php foreach ($master_customer_list as $c): ?>
-                            <option value="<?= htmlspecialchars($c) ?>"><?= htmlspecialchars($c) ?></option>
-                        <?php endforeach; ?>
-                    </select>
+                <!-- COMPUTED TRANSACTION TOTAL -->
+                <div class="cart-summary">
+                    <span class="label">Total Amount:</span>
+                    <span class="total-value" id="grand_total_display">₱0.00</span>
                 </div>
 
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">Date</label>
-                    <input type="date" name="date_sold" id="dateSoldInput" value="<?= date('Y-m-d') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" <?= !$is_authorized ? 'disabled' : '' ?>>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" name="tx_date" class="form-control" value="<?php echo $today; ?>">
                 </div>
-                <?php if ($is_authorized): ?>
-                    <div>
-                        <button type="submit" name="save_stockout" id="submitBtn" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold shadow">
-                            Process Transaction
-                        </button>
-                    </div>
-                <?php endif; ?>
+
+                <button type="submit" class="process-btn" onclick="return validateBeforeSubmit()">Process Transaction</button>
             </form>
         </div>
 
-        <!-- History Log Table -->
-        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-bold text-gray-800">Transaction History Log</h2>
-                <input type="text" id="searchStockout" placeholder="Search transactions..." class="border rounded-md px-3 py-1 text-sm">
+        <!-- RIGHT: TRANSACTION HISTORY LOG -->
+        <div class="panel-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2 class="panel-title" style="margin: 0;">Transaction History Log</h2>
+                <input type="text" placeholder="Search transactions..." class="form-control" style="width: 220px;" onkeyup="filterHistory(this.value)">
             </div>
 
-            <div class="max-h-[500px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg">
-                <table class="min-w-full divide-y divide-gray-200" id="stockoutTable">
-                    <thead class="bg-yellow-100 sticky top-0 z-10">
-                        <tr>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Code</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Date</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Qty</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Type</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Customer Name</th>
-                            <th class="px-3 py-3 text-left text-xs font-bold text-gray-800 uppercase">Description</th>
-                            <th class="px-3 py-3 text-right text-xs font-bold text-gray-800 uppercase">Amount</th>
-                            <th class="px-3 py-3 text-center text-xs font-bold text-gray-800 uppercase">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 text-sm bg-white">
-                        <?php if (!empty($stockouts)): ?>
-                            <?php foreach ($stockouts as $s): ?>
-                                <tr class="hover:bg-gray-50 transition">
-                                    <td class="px-3 py-3 font-mono text-xs text-indigo-600 font-semibold"><?= htmlspecialchars($s['product_code']) ?></td>
-                                    <td class="px-3 py-3 text-gray-600"><?= htmlspecialchars($s['date_sold']) ?></td>
-                                    <td class="px-3 py-3 font-bold text-gray-800"><?= $s['qty_sold'] > 0 ? htmlspecialchars($s['qty_sold']) : '-' ?></td>
-                                    <td class="px-3 py-3">
-                                        <?php 
-                                            $badgeColor = 'bg-blue-100 text-blue-700';
-                                            if ($s['remarks'] === 'Credit') $badgeColor = 'bg-orange-100 text-orange-700';
-                                            if ($s['remarks'] === 'Payment') $badgeColor = 'bg-green-100 text-green-700';
-                                            if ($s['remarks'] === 'Balance') $badgeColor = 'bg-purple-100 text-purple-700';
-                                        ?>
-                                        <span class="px-2 py-1 text-xs rounded font-semibold <?= $badgeColor ?>">
-                                            <?= htmlspecialchars($s['remarks']) ?>
-                                        </span>
-                                    </td>
-                                    <td class="px-3 py-3 text-gray-700 italic"><?= htmlspecialchars($s['customer_name'] ?: '-') ?></td>
-                                    <td class="px-3 py-3 font-medium text-gray-900"><?= htmlspecialchars($s['product_name']) ?></td>
-                                    <td class="px-3 py-3 text-right font-bold text-gray-900">₱<?= number_format($s['total_amount'], 2) ?></td>
-                                    <td class="px-3 py-3 text-center space-x-2">
-                                        <?php if ($is_authorized): ?>
-                                            <button onclick='editTransaction(<?= json_encode($s) ?>)' class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs bg-indigo-50 px-2 py-1 rounded">Edit</button>
-                                            <a href="stockout.php?delete_id=<?= $s['id'] ?>" onclick="return confirm('Are you sure you want to delete this transaction? This will revert inventory and ledger balances.')" class="text-red-600 hover:text-red-900 font-semibold text-xs bg-red-50 px-2 py-1 rounded">Delete</a>
-                                        <?php else: ?>
-                                            <span class="text-gray-400 text-xs italic">Restricted</span>
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
+            <table class="history-table" id="history_table">
+                <thead>
+                    <tr>
+                        <th>CODE</th>
+                        <th>DATE</th>
+                        <th>QTY</th>
+                        <th>TYPE</th>
+                        <th>CUSTOMER NAME</th>
+                        <th>DESCRIPTION</th>
+                        <th>AMOUNT</th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (!empty($transactions)): ?>
+                        <?php foreach ($transactions as $tx): ?>
                             <tr>
-                                <td colspan="8" class="px-4 py-4 text-center text-gray-500">No transactions recorded yet.</td>
+                                <td><?php echo htmlspecialchars($tx['code'] ?? '-'); ?></td>
+                                <td><?php echo htmlspecialchars($tx['transaction_date']); ?></td>
+                                <td><?php echo htmlspecialchars($tx['qty'] ?? '-'); ?></td>
+                                <td><span class="badge-type"><?php echo htmlspecialchars($tx['transaction_type']); ?></span></td>
+                                <td><em><?php echo htmlspecialchars($tx['customer_name'] ?? '-'); ?></em></td>
+                                <td><?php echo htmlspecialchars($tx['description'] ?? ''); ?></td>
+                                <td><strong>₱<?php echo number_format($tx['amount'], 2); ?></strong></td>
+                                <td>
+                                    <a href="stockout.php?delete_id=<?php echo $tx['id']; ?>" class="action-del" onclick="return confirm('Delete this record?')">Delete</a>
+                                </td>
                             </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transactions recorded today.</td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
+
     </div>
-</div>
 
-<script>
-function handleTransactionChange(val) {
-    let productFields = document.getElementById('productFields');
-    let customerContainer = document.getElementById('customerFieldContainer');
-    let amountContainer = document.getElementById('amountFieldContainer');
-    let scanCode = document.getElementById('scan_code');
-    let qtyInput = document.getElementById('qtySoldInput');
-    let customerSelect = document.getElementById('customerSelect');
-    let amountLabel = document.getElementById('amountLabel');
-
-    if (val === 'Payment' || val === 'Balance') {
-        productFields.classList.add('hidden');
-        scanCode.removeAttribute('required');
-        qtyInput.removeAttribute('required');
-
-        customerContainer.classList.remove('hidden');
-        customerSelect.setAttribute('required', 'required');
-
-        amountContainer.classList.remove('hidden');
-        document.getElementById('customAmountInput').setAttribute('required', 'required');
+    <!-- CLIENT-SIDE MULTI-SCAN & CART ENGINE -->
+    <script>
+        // Database product cache for instant offline matching
+        const productDatabase = <?php echo json_encode($products_map); ?>;
         
-        amountLabel.textContent = val === 'Payment' ? 'Payment Amount (₱)' : 'Opening Balance Amount (₱)';
-    } else {
-        productFields.classList.remove('hidden');
-        scanCode.setAttribute('required', 'required');
-        qtyInput.setAttribute('required', 'required');
+        let cartItems = [];
 
-        amountContainer.classList.add('hidden');
-        document.getElementById('customAmountInput').removeAttribute('required');
+        const barcodeInput = document.getElementById('barcode_input');
+        const qtyInput = document.getElementById('qty_input');
+        const cartBody = document.getElementById('cart_body');
+        const grandTotalDisplay = document.getElementById('grand_total_display');
+        const itemsPayload = document.getElementById('items_payload');
 
-        if (val === 'Credit') {
-            customerContainer.classList.remove('hidden');
-            customerSelect.setAttribute('required', 'required');
-        } else {
-            customerContainer.classList.add('hidden');
-            customerSelect.removeAttribute('required');
-        }
-    }
-}
-
-function handleCustomerSelectChange(selectElem) {
-    if (selectElem.value === 'ADD_NEW') {
-        let newName = prompt("Enter new customer name (Last Name, First Name):");
-        if (newName && newName.trim() !== "") {
-            newName = newName.trim();
-            let exists = false;
-            for (let opt of selectElem.options) {
-                if (opt.value.toLowerCase() === newName.toLowerCase()) {
-                    exists = true;
-                    break;
-                }
+        // Allow pressing Enter in the barcode field to add immediately
+        barcodeInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addItemFromScan();
             }
-            if (!exists) {
-                let opt = document.createElement('option');
-                opt.value = newName;
-                opt.textContent = newName;
-                selectElem.insertBefore(opt, selectElem.options[2]);
+        });
+
+        function addItemFromScan() {
+            const code = barcodeInput.value.trim();
+            const qty = parseInt(qtyInput.value) || 1;
+
+            if (!code) return;
+
+            // Lookup product info or default to generic item
+            let name = "Scanned Item (" + code + ")";
+            let price = 0.00;
+
+            if (productDatabase[code]) {
+                name = productDatabase[code].name;
+                price = parseFloat(productDatabase[code].price) || 0.00;
+            } else {
+                // If price is unknown, prompt cashier or default
+                const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter price per unit:`, "0");
+                if (manualPrice === null) return;
+                price = parseFloat(manualPrice) || 0;
             }
-            selectElem.value = newName;
-        } else {
-            selectElem.value = "";
-        }
-    }
-}
 
-function editTransaction(tx) {
-    document.getElementById('edit_id').value = tx.id;
-    document.getElementById('transactionType').value = tx.remarks;
-    handleTransactionChange(tx.remarks);
-
-    if (tx.remarks === 'Payment' || tx.remarks === 'Balance') {
-        document.getElementById('customAmountInput').value = tx.total_amount;
-    } else {
-        document.getElementById('scan_code').value = tx.product_code;
-        document.getElementById('qtySoldInput').value = tx.qty_sold;
-    }
-
-    if (tx.customer_name) {
-        let custSelect = document.getElementById('customerSelect');
-        let found = false;
-        for (let opt of custSelect.options) {
-            if (opt.value === tx.customer_name) {
-                found = true;
-                break;
+            // Check if item already exists in current transaction cart
+            const existingIndex = cartItems.findIndex(item => item.code === code);
+            if (existingIndex > -1) {
+                cartItems[existingIndex].qty += qty;
+            } else {
+                cartItems.push({
+                    code: code,
+                    name: name,
+                    price: price,
+                    qty: qty
+                });
             }
-        }
-        if (!found) {
-            let opt = document.createElement('option');
-            opt.value = tx.customer_name;
-            opt.textContent = tx.customer_name;
-            custSelect.insertBefore(opt, custSelect.options[2]);
-        }
-        custSelect.value = tx.customer_name;
-    }
 
-    document.getElementById('dateSoldInput').value = tx.date_sold;
-    document.getElementById('formTitle').textContent = "Edit Transaction (ID: " + tx.id + ")";
-    document.getElementById('cancelEditBtn').classList.remove('hidden');
-    let submitBtn = document.getElementById('submitBtn');
-    if (submitBtn) {
-        submitBtn.textContent = "Update Transaction";
-        submitBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
-        submitBtn.classList.add('bg-amber-600', 'hover:bg-amber-700');
-    }
-}
-</script>
+            renderCart();
+
+            // Reset inputs for next consecutive scan
+            barcodeInput.value = '';
+            qtyInput.value = '1';
+            barcodeInput.focus();
+        }
+
+        function removeCartItem(index) {
+            cartItems.splice(index, 1);
+            renderCart();
+        }
+
+        function renderCart() {
+            if (cartItems.length === 0) {
+                cartBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td></tr>`;
+                grandTotalDisplay.innerText = "₱0.00";
+                itemsPayload.value = "[]";
+                return;
+            }
+
+            let html = '';
+            let grandTotal = 0;
+
+            cartItems.forEach((item, index) => {
+                const subtotal = item.qty * item.price;
+                grandTotal += subtotal;
+
+                html += `
+                    <tr>
+                        <td>
+                            <strong>${item.code}</strong><br>
+                            <small style="color: #64748b;">${item.name}</small>
+                        </td>
+                        <td>${item.qty}</td>
+                        <td>₱${item.price.toFixed(2)}</td>
+                        <td><strong>₱${subtotal.toFixed(2)}</strong></td>
+                        <td>
+                            <button type="button" class="cart-delete-btn" onclick="removeCartItem(${index})">✕</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            cartBody.innerHTML = html;
+            grandTotalDisplay.innerText = "₱" + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            itemsPayload.value = JSON.stringify(cartItems);
+        }
+
+        function toggleCustomerField() {
+            const txType = document.getElementById('tx_type').value;
+            const customerGroup = document.getElementById('customer_group');
+            customerGroup.style.display = (txType === 'Credit' || txType === 'Payment') ? 'block' : 'none';
+        }
+
+        function validateBeforeSubmit() {
+            if (cartItems.length === 0) {
+                alert("Please scan at least one item before processing the transaction.");
+                return false;
+            }
+            return true;
+        }
+
+        function filterHistory(query) {
+            const filter = query.toLowerCase();
+            const rows = document.querySelectorAll("#history_table tbody tr");
+            rows.forEach(row => {
+                const text = row.innerText.toLowerCase();
+                row.style.display = text.includes(filter) ? "" : "none";
+            });
+        }
+    </script>
+</body>
+</html>
