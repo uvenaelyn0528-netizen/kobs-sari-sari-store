@@ -134,6 +134,33 @@ try {
             color: var(--text-dark);
         }
 
+        /* --- BACK BUTTON STYLING --- */
+        .back-btn-container {
+            margin-bottom: 15px;
+        }
+
+        .back-to-store-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            background-color: #ffffff;
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            color: var(--text-dark);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            transition: all 0.2s ease;
+        }
+
+        .back-to-store-btn:hover {
+            background-color: #f8fafc;
+            border-color: #cbd5e1;
+            color: var(--primary-blue);
+        }
+
         /* --- STAT SUMMARY CARDS --- */
         .stats-grid {
             display: grid;
@@ -370,6 +397,13 @@ try {
     </style>
 </head>
 <body>
+
+    <!-- UPPER LEFT BACK BUTTON TO STORE.PHP -->
+    <div class="back-btn-container">
+        <a href="store.php" class="back-to-store-btn">
+            &larr; Back to Store
+        </a>
+    </div>
 
     <!-- TOP TOTAL SUMMARY CARDS -->
     <div class="stats-grid">
