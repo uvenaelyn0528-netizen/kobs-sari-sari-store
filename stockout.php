@@ -141,10 +141,55 @@ try {
     }
 } catch (Exception $e) {}
 
-// Populate Customer List directly from 'customers' table
-$customers_data = [];
-$customers_map  = []; // Name to ID lookup
+// --- MASTER CUSTOMER LIST INTEGRATION ---
+$master_customer_list = [
+    "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
+    "Aguilo, Kim", "Aguindao, Omar", "Albia, Jhonmark", "Amoguis, Joshua Rheynaird", 
+    "Ansing, Arje", "Ansing, Jose", "Araño, Ronelo", "Aromin, Dan Alekhine", 
+    "Arroyo, Olcen", "Asuncion, Jonathan", "Badinas, Pedro", "Baguinon, Mark Aldrin", 
+    "Balasa, Harvey", "Balbalang, Manny", "Baldicañas, Manuel", "Ballesteros, Emilio", 
+    "Bambico, Michael", "Barlomento, Mark Anthony", "Beracis, Greg", "Bermudez, Liezel", 
+    "Bonao, Ronald", "Borabod, Rogelio", "Bulawan, Mervin", "Caberio, Aljun", 
+    "Caberio, John Angelo", "Calista, Ralph John", "Campo, Ederlito", "Cang, Eric", 
+    "Canor, Arniel", "Capagalan, Nico", "Carabio, Dindo", "Caranyagan, Romeo", 
+    "Casaña, Roger", "Catamora, Jounysis", "Codaste, Dino", "Colinares, Drexell John", 
+    "Cordiner, Ryan Lyn", "Corpo (Peter, Marlo, Timot)", "Corpo (Kevin, Kelly & Dan)", 
+    "Corpo (Dexil, Lingatong and others)", "Corpo (Kevin & Junmar)", "Cruz, Rolliber", 
+    "Cuaresma, Jemson", "Dado, Eric", "Dadsa-ag, Peter Paul", "Daganio, Denmark", 
+    "Daganio, Janus", "Daiz, Jhon Carlo", "Damage", "Daño, Juven", "Dapo, Angelo", 
+    "Dela Cruz, Flordeliza", "Delalamon, Jovani", "Delfinado, Velcar", "Delos Santos, Jessy", 
+    "Deloso, Rotchell", "Deocampo, Junlie", "Diez, Jems", "Doblon, Mario Francis", 
+    "Dolorosa, Jerwen", "Dorimon, Wilson", "Dulfo, Erika Loren", "Ebano, Joseph", 
+    "Elegado, Bernard", "Ensalada, Dionisio", "Enson, George", "Ercillo, Ersal", 
+    "Escobal, Mark Jorel", "Espino, Apple", "Florante, Isaias", "Flores, Juancho", 
+    "Formilles, Jerry", "Gagabuan, Arjay", "Gagujas, Marlou", "Gajol, Ginalyn", 
+    "Garcia, Benny", "Genelaso, Elmer", "Gingco, Bhert Joy", "Golloso, Raymond", 
+    "Guiao, Ashley", "Guimbaolibot, Jayson Anthony", "Hombria, Nestor", "Iligan, Rolly", 
+    "Jimenez, Aljon", "Juntilla, Ranel", "Juros, Jessie", "Kobelco Junmar", 
+    "Kobelco kelly", "Kobelco kevin", "Labotap, Reggie", "Laconsay, Kevin", 
+    "Lazo, Mark Anthony", "Lingatong, Albert", "Lipranon, Jomar", "Lisondra, Dennis", 
+    "Llemos, John Marvic", "Logroño, Gerundio", "Longatan, Mark Foustere", 
+    "Macabalo, Adrian", "Macabenta, Jesreel", "Macabenta, Jessie", "Maque, Juluis", 
+    "Mara, Pedro", "Marquito, Edwin", "Melendez, Duddy", "Monoy, Louien", 
+    "Napoles, Aileen", "Ogrimen, Nonito", "Olasiman, Reynante", "Oliver, Nico", 
+    "Ollay, Arnel", "Omapas, Antonino", "Omoso, Jing", "Orongan, Romel", 
+    "Orongan, Jay", "Ortillo, Francisco", "Ortillo, Rico", "Pabelonia, Peter Jeffrey", 
+    "Padriquez, Ronie", "Padual, Benjie", "Padulaga, Roldan", "Pagatpatan, Salvacion", 
+    "Panungcat, Desiderio", "Parco, RV Niño", "Pelenio, Evelyn", "Picardal, Baldomero", 
+    "Pinggoy, Ranil", "Pingos, Jovel", "Porton, Ronnel", "Princillo, Ramil", 
+    "Quimbo", "Ramayramay, Jonathan", "Regajal, Rolando", "Reyes, Ricky", 
+    "Rivera, Aldrin", "Rodolfo, Fernando", "Rosal, Napoleon", "Sabas, Jeffrey", 
+    "Saga, Rezniel", "Saldivar, Jeamboy", "Salve, Levi", "Sandoval, Erwin", 
+    "Santos, Mark James", "Saylag, Kieth", "Sia, Amor", "Sidaya, Jannel", 
+    "Somoray, Rogelio", "Sulapas, Justine", "Taguba, Glenn", "Tarpin, Ma. Andrea", 
+    "Tejero, Mark Anthony", "Tubil, Romeo", "Uveña, Elyn", "Uveña, Mario", 
+    "Villarosa, Reynan Dave", "Yurong, Edmon"
+];
 
+$customers_data = [];
+$customers_map  = []; // Lowercase Name -> Customer ID
+
+// Fetch existing customers from database table to map IDs
 try {
     $c_stmt = $pdo->query("SELECT * FROM customers ORDER BY 1 ASC");
     if ($c_stmt) {
@@ -161,30 +206,41 @@ try {
                 }
             }
             if ($cname) {
-                $customers_data[] = ['id' => $cid, 'name' => $cname];
-                if ($cid) {
-                    $customers_map[strtolower($cname)] = $cid;
-                }
+                $customers_map[strtolower($cname)] = $cid;
             }
         }
     }
 } catch (Exception $e) {}
 
-// Fallback: Populate customer names from transactions history if customers table is empty
-if (empty($customers_data)) {
-    $col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
-    try {
-        if ($col_cust) {
-            $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != '' AND {$col_cust} != '-'");
-            while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
-                if (!empty($row[0])) {
-                    $cname = trim($row[0]);
-                    $customers_data[] = ['id' => null, 'name' => $cname];
-                }
-            }
-        }
-    } catch (Exception $e) {}
+// Consolidate master customer list and DB records
+$all_customers_set = [];
+foreach ($master_customer_list as $m_name) {
+    $clean_name = rtrim(trim($m_name), ',');
+    if ($clean_name !== '') {
+        $all_customers_set[strtolower($clean_name)] = $clean_name;
+    }
 }
+
+// Add any DB-only customer names to set
+foreach ($customers_map as $low_name => $cid) {
+    if (!isset($all_customers_set[$low_name])) {
+        $all_customers_set[$low_name] = ucwords($low_name);
+    }
+}
+
+// Build final customers data array
+foreach ($all_customers_set as $low_name => $disp_name) {
+    $cid = $customers_map[$low_name] ?? null;
+    $customers_data[] = [
+        'id'   => $cid,
+        'name' => $disp_name
+    ];
+}
+
+// Sort customer list alphabetically
+usort($customers_data, function($a, $b) {
+    return strnatcasecmp($a['name'], $b['name']);
+});
 
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
