@@ -108,44 +108,61 @@ try {
     $categories = [];
 }
 
-// 1. Aggregation from stockout history table
+// 1. Fetch and aggregate stockout history safely across potential database table variations
 $stockout_totals_by_code = [];
 $stockout_totals_by_name = [];
 
-try {
-    $soStmt = $pdo->query("SELECT * FROM stockout");
-    $all_stockouts = $soStmt->fetchAll(PDO::FETCH_ASSOC);
+$possible_tables = ['stockout', 'stock_out', 'stockouts', '"stockout"', '"Stockout"'];
 
-    foreach ($all_stockouts as $so) {
-        $qty = (int)($so['qty'] ?? $so['quantity'] ?? 0);
-        
-        $code = trim($so['product_code'] ?? $so['code'] ?? $so['barcode'] ?? '');
-        $name = strtolower(trim($so['description'] ?? $so['product_name'] ?? ''));
+foreach ($possible_tables as $tbl) {
+    try {
+        $soStmt = $pdo->query("SELECT * FROM {$tbl}");
+        $all_stockouts = $soStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        if (!empty($code)) {
-            $stockout_totals_by_code[$code] = ($stockout_totals_by_code[$code] ?? 0) + $qty;
+        if (!empty($all_stockouts)) {
+            foreach ($all_stockouts as $raw_so) {
+                // Standardize column key names to lower case for case-insensitive lookup
+                $so = array_change_key_case($raw_so, CASE_LOWER);
+
+                $qty = (int)($so['qty'] ?? $so['quantity'] ?? $so['count'] ?? 0);
+                
+                // Read barcode/code variations
+                $raw_code = $so['code'] ?? $so['product_code'] ?? $so['barcode'] ?? $so['item_code'] ?? '';
+                $clean_code = preg_replace('/\s+/', '', (string)$raw_code);
+
+                // Read description/product name variations
+                $raw_name = $so['description'] ?? $so['product_name'] ?? $so['item_name'] ?? '';
+                $clean_name = strtolower(trim((string)$raw_name));
+
+                if ($clean_code !== '') {
+                    $stockout_totals_by_code[$clean_code] = ($stockout_totals_by_code[$clean_code] ?? 0) + $qty;
+                }
+                if ($clean_name !== '') {
+                    $stockout_totals_by_name[$clean_name] = ($stockout_totals_by_name[$clean_name] ?? 0) + $qty;
+                }
+            }
+            break; // Stop loop once data is successfully fetched
         }
-        if (!empty($name)) {
-            $stockout_totals_by_name[$name] = ($stockout_totals_by_name[$name] ?? 0) + $qty;
-        }
+    } catch (PDOException $e) {
+        continue;
     }
-} catch (PDOException $e) {
-    // If stockout table is empty or unreadable, default gracefully
 }
 
-// 2. Fetch Products List and calculate totals matching by Barcode OR Product Name
+// 2. Fetch Products List and match barcode / product name dynamically
 try {
     $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($products as &$p) {
-        $p_code = trim($p['product_code'] ?? '');
-        $p_name = strtolower(trim($p['product_name'] ?? ''));
+        $p_lower = array_change_key_case($p, CASE_LOWER);
 
-        $out_by_code = (!empty($p_code) && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
-        $out_by_name = (!empty($p_name) && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
+        $p_code = preg_replace('/\s+/', '', (string)($p_lower['product_code'] ?? $p_lower['code'] ?? $p_lower['barcode'] ?? ''));
+        $p_name = strtolower(trim((string)($p_lower['product_name'] ?? $p_lower['name'] ?? '')));
 
-        // Match by barcode first; fallback to product name match
+        $out_by_code = ($p_code !== '' && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
+        $out_by_name = ($p_name !== '' && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
+
+        // Use highest calculated total from barcode or description match
         $p['aggregated_out'] = max($out_by_code, $out_by_name);
     }
     unset($p);
@@ -229,15 +246,15 @@ try {
                 <div class="grid grid-cols-3 gap-2">
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Stock In</label>
-                        <input type="number" id="stock_in_input" name="stock_in" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
+                        <input type="number" id="stock_in_input" name="stock_in" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_in'] ?? $edit_product['stock_in'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Stock Out</label>
-                        <input type="number" id="stock_out_input" name="stock_out" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
+                        <input type="number" id="stock_out_input" name="stock_out" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['Stock_out'] ?? $edit_product['stock_out'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
-                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars(($edit_product['Stock_in'] ?? 0) - ($edit_product['Stock_out'] ?? 0)) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
+                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars(($edit_product['Stock_in'] ?? $edit_product['stock_in'] ?? 0) - ($edit_product['Stock_out'] ?? $edit_product['stock_out'] ?? 0)) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                 </div>
 
@@ -301,19 +318,20 @@ try {
                         <?php if (!empty($products)): ?>
                             <?php foreach ($products as $p): ?>
                                 <?php 
-                                    $p_id     = $p['id'] ?? '';
-                                    $p_code   = $p['product_code'] ?? '';
-                                    $p_name   = $p['product_name'] ?? '';
-                                    $p_cat    = $p['category'] ?? 'Uncategorized';
-                                    $p_um     = $p['um'] ?? '';
-                                    $p_in     = (int)($p['Stock_in'] ?? 0);
+                                    $p_lower  = array_change_key_case($p, CASE_LOWER);
+                                    $p_id     = $p_lower['id'] ?? '';
+                                    $p_code   = $p_lower['product_code'] ?? $p_lower['code'] ?? '';
+                                    $p_name   = $p_lower['product_name'] ?? $p_lower['name'] ?? '';
+                                    $p_cat    = $p_lower['category'] ?? 'Uncategorized';
+                                    $p_um     = $p_lower['um'] ?? '';
+                                    $p_in     = (int)($p_lower['stock_in'] ?? 0);
                                     
-                                    // Combine manually set Stock_out with aggregated stockout log totals
-                                    $p_out    = (int)($p['Stock_out'] ?? 0) + (int)($p['aggregated_out'] ?? 0);
+                                    // Manual Stock_out plus live dynamic stockouts
+                                    $p_out    = (int)($p_lower['stock_out'] ?? 0) + (int)($p['aggregated_out'] ?? 0);
                                     
-                                    // Compute remaining inventory (allows negative numbers)
+                                    // Compute remaining quantity
                                     $p_qty    = $p_in - $p_out; 
-                                    $p_ret    = (float)($p['retail_price'] ?? 0);
+                                    $p_ret    = (float)($p_lower['retail_price'] ?? 0);
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
                                 <tr <?= !$is_viewer ? "onclick=\"window.location.href='products.php?edit=" . urlencode($p_id) . "'\" class=\"cursor-pointer transition hover:bg-indigo-50\"" : "class=\"transition hover:bg-gray-50\"" ?>>
@@ -358,21 +376,21 @@ document.getElementById('product_code_input').addEventListener('input', function
             .then(data => {
                 if (data.success && data.product) {
                     let p = data.product;
-                    document.getElementById('product_name_input').value = p.product_name || '';
+                    document.getElementById('product_name_input').value = p.product_name || p.name || '';
                     document.getElementById('category_input').value = p.category || '';
                     document.getElementById('um_input').value = p.um || 'pc';
                     document.getElementById('buy_price_input').value = p.buy_price || 0;
                     document.getElementById('retail_price_input').value = p.retail_price || 0;
-                    document.getElementById('stock_in_input').value = p.Stock_in || 0;
-                    document.getElementById('stock_out_input').value = p.Stock_out || 0;
-                    document.getElementById('stock_qty_input').value = (p.Stock_in || 0) - (p.Stock_out || 0);
+                    document.getElementById('stock_in_input').value = p.Stock_in || p.stock_in || 0;
+                    document.getElementById('stock_out_input').value = p.Stock_out || p.stock_out || 0;
+                    document.getElementById('stock_qty_input').value = (p.Stock_in || p.stock_in || 0) - (p.Stock_out || p.stock_out || 0);
                 }
             })
             .catch(err => console.error('Error fetching barcode:', err));
     }
 });
 
-// Auto-compute remaining quantity (supports negative values)
+// Auto-compute remaining quantity
 function calculateRemaining() {
     let stockIn = parseFloat(document.getElementById('stock_in_input').value) || 0;
     let stockOut = parseFloat(document.getElementById('stock_out_input').value) || 0;
