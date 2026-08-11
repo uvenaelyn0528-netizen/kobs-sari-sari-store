@@ -38,15 +38,15 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete
 
 // Handle Add Product Submission (Blocked for viewers)
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
-    $code         = trim($_POST['product_code'] ?? '');
-    $name         = $_POST['product_name'] ?? '';
-    $category     = $_POST['category'] ?? '';
-    $um           = $_POST['um'] ?? 'pc';
-    $buy_price    = $_POST['buy_price'] ?? 0;
-    $retail_price = $_POST['retail_price'] ?? 0;
-    $stock_qty    = $_POST['stock_qty'] ?? 0;
-    $stock_in     = $_POST['stock_in'] ?? $stock_qty;
-    $stock_out    = $_POST['stock_out'] ?? 0;
+    $code          = trim($_POST['product_code'] ?? '');
+    $name          = $_POST['product_name'] ?? '';
+    $category      = $_POST['category'] ?? '';
+    $um            = $_POST['um'] ?? 'pc';
+    $buy_price     = $_POST['buy_price'] ?? 0;
+    $retail_price  = $_POST['retail_price'] ?? 0;
+    $stock_in      = $_POST['stock_in'] ?? 0;
+    $stock_out     = $_POST['stock_out'] ?? 0;
+    $stock_qty     = $stock_in - $stock_out; // Calculate remaining directly
 
     try {
         $stmt = $pdo->prepare('INSERT INTO products (product_code, product_name, category, um, "Stock_in", "Stock_out", stock_qty, buy_price, retail_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -61,16 +61,16 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_pr
 
 // Handle Update Product Submission (Blocked for viewers)
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
-    $code         = trim($_POST['product_code'] ?? '');
-    $name         = $_POST['product_name'] ?? '';
-    $category     = $_POST['category'] ?? '';
-    $um           = $_POST['um'] ?? 'pc';
-    $buy_price    = $_POST['buy_price'] ?? 0;
-    $retail_price = $_POST['retail_price'] ?? 0;
-    $stock_qty    = $_POST['stock_qty'] ?? 0;
-    $stock_in     = $_POST['stock_in'] ?? $stock_qty;
-    $stock_out    = $_POST['stock_out'] ?? 0;
-    $original_id  = $_POST['original_id'] ?? '';
+    $code          = trim($_POST['product_code'] ?? '');
+    $name          = $_POST['product_name'] ?? '';
+    $category      = $_POST['category'] ?? '';
+    $um            = $_POST['um'] ?? 'pc';
+    $buy_price     = $_POST['buy_price'] ?? 0;
+    $retail_price  = $_POST['retail_price'] ?? 0;
+    $stock_in      = $_POST['stock_in'] ?? 0;
+    $stock_out     = $_POST['stock_out'] ?? 0;
+    $stock_qty     = $stock_in - $stock_out; // Calculate remaining directly
+    $original_id   = $_POST['original_id'] ?? '';
 
     try {
         $stmt = $pdo->prepare('UPDATE products SET product_code = ?, product_name = ?, category = ?, um = ?, "Stock_in" = ?, "Stock_out" = ?, stock_qty = ?, buy_price = ?, retail_price = ? WHERE id = ?');
@@ -108,7 +108,7 @@ try {
     $categories = [];
 }
 
-// Fetch Products List
+// Fetch Products List with dynamic transaction sums if applicable
 try {
     $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -143,7 +143,7 @@ try {
     <?php endif; ?>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <!-- Add / Edit Product Form (Hidden or Disabled for Viewers) -->
+        <!-- Add / Edit Product Form -->
         <div class="bg-white p-6 rounded-xl shadow-md h-fit">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-gray-800">
@@ -200,7 +200,7 @@ try {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
-                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['stock_qty'] ?? '') ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
+                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['stock_qty'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                 </div>
 
@@ -271,7 +271,7 @@ try {
                                     $p_um     = $p['um'] ?? '';
                                     $p_in     = $p['Stock_in'] ?? 0;
                                     $p_out    = $p['Stock_out'] ?? 0;
-                                    $p_qty    = $p_in - $p_out; 
+                                    $p_qty    = $p_in - $p_out; // Calculates negative values properly
                                     $p_ret    = $p['retail_price'] ?? 0;
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
@@ -287,7 +287,7 @@ try {
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_um) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_in) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_out) ?></td>
-                                    <td class="px-3 py-3 font-bold whitespace-nowrap <?= $p_qty <= 5 ? 'text-red-600' : 'text-gray-800' ?>">
+                                    <td class="px-3 py-3 font-bold whitespace-nowrap <?= $p_qty <= 0 ? 'text-red-600' : 'text-gray-800' ?>">
                                         <?= htmlspecialchars($p_qty) ?>
                                     </td>
                                     <td class="px-3 py-3 text-green-700 font-bold whitespace-nowrap">₱<?= number_format($p_ret, 2) ?></td>
@@ -308,7 +308,7 @@ try {
 
 <script>
 <?php if (!$is_viewer): ?>
-// Barcode scanner listener (Only active for admin/tindera)
+// Barcode scanner listener
 document.getElementById('product_code_input').addEventListener('input', function() {
     let barcode = this.value.trim();
     if (barcode.length > 1) {
@@ -324,20 +324,20 @@ document.getElementById('product_code_input').addEventListener('input', function
                     document.getElementById('retail_price_input').value = p.retail_price || 0;
                     document.getElementById('stock_in_input').value = p.Stock_in || 0;
                     document.getElementById('stock_out_input').value = p.Stock_out || 0;
-                    document.getElementById('stock_qty_input').value = p.stock_qty || 0;
+                    document.getElementById('stock_qty_input').value = (p.Stock_in || 0) - (p.Stock_out || 0);
                 }
             })
             .catch(err => console.error('Error fetching barcode:', err));
     }
 });
 
-// Auto-compute remaining quantity
+// Auto-compute remaining quantity (allows negative numbers)
 function calculateRemaining() {
     let stockIn = parseFloat(document.getElementById('stock_in_input').value) || 0;
     let stockOut = parseFloat(document.getElementById('stock_out_input').value) || 0;
     let remaining = stockIn - stockOut;
     
-    document.getElementById('stock_qty_input').value = remaining >= 0 ? remaining : 0;
+    document.getElementById('stock_qty_input').value = remaining;
 }
 
 document.getElementById('stock_in_input').addEventListener('input', calculateRemaining);
