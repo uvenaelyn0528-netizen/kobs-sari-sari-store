@@ -129,19 +129,15 @@ $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 $pk_col = $tx_columns[0] ?? 'id';
 
 // --- 2. PRE-DETECT PRODUCTS & CUSTOMERS TABLES ---
+$prod_qty_col = null;
 $prod_code_col = null;
-$prod_out_col  = null;
-$prod_in_col   = null;
-$prod_rem_col  = null;
 
 try {
     $p_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE lower(table_name) = 'products' AND table_schema = 'public'");
     $p_cols = $p_cols_stmt->fetchAll(PDO::FETCH_COLUMN);
     if (!empty($p_cols)) {
+        $prod_qty_col  = findSingleColumn(['quantity', 'remaining_qty', 'qty', 'stock'], ['qty', 'stock', 'quantity'], $p_cols);
         $prod_code_col = findSingleColumn(['product_code', 'barcode', 'item_code', 'code'], ['code', 'bar'], $p_cols);
-        $prod_out_col  = findSingleColumn(['stock_out', 'qty_out', 'out_qty', 'stockout', 'out', 'quantity_out'], ['out'], $p_cols);
-        $prod_in_col   = findSingleColumn(['stock_in', 'qty_in', 'in_qty', 'stockin', 'in', 'quantity_in'], ['in'], $p_cols);
-        $prod_rem_col  = findSingleColumn(['remaining_qty', 'remaining', 'qty', 'quantity', 'stock', 'rem_qty'], ['rem', 'qty', 'stock'], $p_cols, [$prod_out_col, $prod_in_col]);
     }
 } catch (Exception $e) {}
 
@@ -225,12 +221,14 @@ foreach ($master_customer_list as $m_name) {
     }
 }
 
+// Add any DB-only customer names to set
 foreach ($customers_map as $low_name => $cid) {
     if (!isset($all_customers_set[$low_name])) {
         $all_customers_set[$low_name] = ucwords($low_name);
     }
 }
 
+// Build final customers data array
 foreach ($all_customers_set as $low_name => $disp_name) {
     $cid = $customers_map[$low_name] ?? null;
     $customers_data[] = [
@@ -239,6 +237,7 @@ foreach ($all_customers_set as $low_name => $disp_name) {
     ];
 }
 
+// Sort customer list alphabetically
 usort($customers_data, function($a, $b) {
     return strnatcasecmp($a['name'], $b['name']);
 });
@@ -252,6 +251,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     $items_raw = $_POST['items_payload'] ?? '[]';
     $items = json_decode($items_raw, true);
 
+    // Dynamic resolution for customer_id
     if (!$selected_cust_id && !empty($customer_name)) {
         $c_lower = strtolower($customer_name);
         if (isset($customers_map[$c_lower])) {
@@ -286,15 +286,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         continue;
                     }
 
+                    // Product Code / Barcode assignment
                     if (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || strpos($c, 'code') !== false || strpos($c, 'barcode') !== false) {
                         $insert_data[$col] = $barcode;
                     }
+
+                    // Item Description assignment
                     elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
                         $insert_data[$col] = (string)$desc;
                     }
+
+                    // Foreign Key Product ID
                     elseif (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
+
+                    // Foreign Key Customer ID & Customer Name
                     elseif ($c === 'customer_id') {
                         $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                     }
@@ -305,6 +312,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                             $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
                         }
                     }
+
+                    // Quantities, Amounts, Prices, Date, Type
                     elseif (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
                         $insert_data[$col] = $tx_date;
                     }
@@ -325,7 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Default unmapped column handling
+                // Default assignment for unmapped columns
                 try {
                     $nn_stmt = $pdo->query("
                         SELECT column_name, data_type, is_nullable 
@@ -362,21 +371,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 } catch (Exception $e) {}
 
-                // Sanitization
+                // STRICT FOREIGN KEY & DATA TYPE SANITIZATION
                 foreach ($insert_data as $f_col => $f_val) {
                     $c_lower = strtolower($f_col);
                     $is_fk_or_id = (substr($c_lower, -3) === '_id' || $c_lower === 'id' || in_array($c_lower, array_map('strtolower', $id_candidates)));
 
                     if (isIntColumn($f_col, $tx_col_types)) {
                         if ($is_fk_or_id) {
-                            $insert_data[$f_col] = safeInt32($f_val, null);
+                            $insert_data[$f_col] = safeInt32($f_val, null); // Convert 0 to NULL
                         } else {
                             $insert_data[$f_col] = (int)$f_val;
                         }
                     }
                 }
 
-                // Execute INSERT into transactions
+                // Execute INSERT query
                 $fields = array_keys($insert_data);
                 $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
 
@@ -389,32 +398,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // --- UPDATE PRODUCTS TABLE: STOCK OUT & REMAINING QUANTITY ---
-                if ($tx_type !== 'Payment' && $prod_code_col) {
-                    $setClauses = [];
-                    $params = [':qty' => $qty, ':barcode' => $barcode];
-
-                    // 1. Increment Stock OUT
-                    if ($prod_out_col) {
-                        $setClauses[] = "{$prod_out_col} = COALESCE({$prod_out_col}, 0) + :qty";
-                    }
-
-                    // 2. Recalculate REMAINING QTY (IN - OUT)
-                    if ($prod_rem_col) {
-                        if ($prod_in_col && $prod_out_col) {
-                            $setClauses[] = "{$prod_rem_col} = COALESCE({$prod_in_col}, 0) - (COALESCE({$prod_out_col}, 0) + :qty)";
-                        } elseif ($prod_out_col) {
-                            $setClauses[] = "{$prod_rem_col} = - (COALESCE({$prod_out_col}, 0) + :qty)";
-                        } else {
-                            $setClauses[] = "{$prod_rem_col} = COALESCE({$prod_rem_col}, 0) - :qty";
-                        }
-                    }
-
-                    if (!empty($setClauses)) {
-                        $updateSql = "UPDATE products SET " . implode(', ', $setClauses) . " WHERE {$prod_code_col} = :barcode";
-                        $updateStmt = $pdo->prepare($updateSql);
-                        $updateStmt->execute($params);
-                    }
+                // Deduct stock from products
+                if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
+                    $deductStmt = $pdo->prepare("
+                        UPDATE products 
+                        SET {$prod_qty_col} = {$prod_qty_col} - :qty 
+                        WHERE {$prod_code_col} = :barcode
+                    ");
+                    $deductStmt->execute([':qty' => $qty, ':barcode' => $barcode]);
                 }
             }
 
