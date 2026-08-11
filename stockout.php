@@ -9,9 +9,9 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// Safe 32-Bit Integer Helper (Prevents PostgreSQL 22003 overflow)
-function safeInt32($val, $fallback = null) {
-    if (!is_numeric($val) || $val === null) return $fallback;
+// Safe 32-Bit Integer Helper (Prevents PostgreSQL 22003/22P02 overflow)
+function safeInt32($val, $fallback = 0) {
+    if (!is_numeric($val) || $val === null || $val === '' || $val === '-') return $fallback;
     $num = (float)$val;
     if ($num > 2147483647 || $num < -2147483648) {
         return $fallback;
@@ -21,6 +21,7 @@ function safeInt32($val, $fallback = null) {
 
 // --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION (HISTORY LOG) ---
 function getTxVal($row, $candidates, $keywords = [], $default = '-') {
+    // 1. Exact candidate match
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
             if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
@@ -28,9 +29,14 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
             }
         }
     }
+    // 2. Keyword substring match (excluding _id columns for non-ID fields)
     foreach ($keywords as $kw) {
         foreach ($row as $col_name => $val) {
-            if (strpos(strtolower($col_name), strtolower($kw)) !== false && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
+            $col_lower = strtolower($col_name);
+            if ($kw !== 'id' && (substr($col_lower, -3) === '_id' || $col_lower === 'id')) {
+                continue;
+            }
+            if (strpos($col_lower, strtolower($kw)) !== false && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
                 return $val;
             }
         }
@@ -63,14 +69,11 @@ try {
     }
 } catch (Exception $e) {}
 
-function is32BitIntType($cname, $tx_col_types) {
+function isIntColumn($cname, $tx_col_types) {
     $c_lower = strtolower($cname);
     if (!isset($tx_col_types[$c_lower])) return false;
     $dt = $tx_col_types[$c_lower];
-    return (strpos($dt, 'int') !== false || strpos($dt, 'serial') !== false) 
-           && strpos($dt, 'bigint') === false 
-           && strpos($dt, 'int8') === false 
-           && strpos($dt, 'bigserial') === false;
+    return (strpos($dt, 'int') !== false || strpos($dt, 'serial') !== false);
 }
 
 function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = []) {
@@ -108,7 +111,7 @@ $id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
 $id_keywords     = ['product_id', 'item_id'];
 
 $desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
-$desc_keywords   = ['desc', 'particular', 'remark', 'name', 'product', 'item'];
+$desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_name', 'product_desc'];
 
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
@@ -145,7 +148,7 @@ $customer_list = [];
 $col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
 try {
     if ($col_cust) {
-        $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != ''");
+        $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != '' AND {$col_cust} != '-'");
         while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
             if (!empty($row[0])) $customer_list[] = trim($row[0]);
         }
@@ -176,7 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                 $insert_data = [];
 
-                // Standardized Column Mapping across transactions schema
                 foreach ($tx_columns as $col) {
                     $c = strtolower($col);
 
@@ -186,50 +188,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                     // Product Code / Barcode assignment
                     if (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || strpos($c, 'code') !== false || strpos($c, 'barcode') !== false) {
-                        if (is32BitIntType($col, $tx_col_types)) {
-                            $insert_data[$col] = safeInt32($barcode, 0);
-                        } else {
-                            $insert_data[$col] = (string)$barcode;
-                        }
+                        $insert_data[$col] = $barcode;
                     }
 
                     // Item Description / Product Name assignment
-                    if (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc']) || strpos($c, 'desc') !== false) {
+                    elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
                         $insert_data[$col] = (string)$desc;
                     }
 
                     // Foreign Key Product ID
-                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
+                    elseif (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
 
                     // Customer Name
-                    if (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || strpos($c, 'cust') !== false) {
+                    elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || strpos($c, 'cust') !== false) {
                         $insert_data[$col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '-';
                     }
 
                     // Quantities, Amounts, Prices, Date, Type
-                    if (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
+                    elseif (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
                         $insert_data[$col] = $tx_date;
                     }
-                    if (in_array($c, ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count']) || strpos($c, 'qty') !== false) {
+                    elseif (in_array($c, ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count']) || strpos($c, 'qty') !== false) {
                         $insert_data[$col] = $qty;
                     }
-                    if (in_array($c, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type']) || strpos($c, 'type') !== false) {
+                    elseif (in_array($c, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type']) || strpos($c, 'type') !== false) {
                         $insert_data[$col] = $tx_type;
                     }
-                    if (in_array($c, ['amount', 'subtotal', 'total', 'grand_total', 'val', 'price_total'])) {
+                    elseif (in_array($c, ['amount', 'subtotal', 'total', 'grand_total', 'val', 'price_total'])) {
                         $insert_data[$col] = $amount;
                     }
-                    if (in_array($c, ['retail_price', 'selling_price', 'price', 'unit_price'])) {
+                    elseif (in_array($c, ['retail_price', 'selling_price', 'price', 'unit_price'])) {
                         $insert_data[$col] = $price;
                     }
-                    if (in_array($c, ['buy_price', 'cost_price', 'cost', 'purchase_price'])) {
+                    elseif (in_array($c, ['buy_price', 'cost_price', 'cost', 'purchase_price'])) {
                         $insert_data[$col] = $buy_price;
                     }
                 }
 
-                // Fill non-nullable columns missing default values safely
+                // Non-nullable column default handling
                 try {
                     $nn_stmt = $pdo->query("
                         SELECT column_name, data_type 
@@ -243,10 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         $c_name = $nn_row['column_name'];
                         if (in_array(strtolower($c_name), $generated_cols) || strtolower($c_name) === strtolower($pk_col)) continue;
 
-                        if (!array_key_exists($c_name, $insert_data)) {
-                            // Skip foreign key product_id
-                            if (in_array(strtolower($c_name), array_map('strtolower', $id_candidates))) continue;
-
+                        if (!array_key_exists($c_name, $insert_data) || $insert_data[$c_name] === null) {
                             $dtype = strtolower($nn_row['data_type']);
                             if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
                                 $insert_data[$c_name] = 0;
@@ -260,6 +255,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         }
                     }
                 } catch (Exception $e) {}
+
+                // STRICT DATA TYPE SANITIZATION FOR POSTGRESQL
+                foreach ($insert_data as $f_col => $f_val) {
+                    if (isIntColumn($f_col, $tx_col_types)) {
+                        if ($f_val === null || $f_val === '' || $f_val === '-') {
+                            $insert_data[$f_col] = 0;
+                        } else {
+                            $insert_data[$f_col] = safeInt32($f_val, 0);
+                        }
+                    }
+                }
 
                 // Build & execute INSERT query
                 $fields = array_keys($insert_data);
@@ -337,8 +343,9 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- FETCH PRODUCTS FOR SCANNER LOOKUP ---
+// --- FETCH PRODUCTS FOR LOOKUP ---
 $products_map = [];
+$products_by_id = [];
 try {
     $prod_stmt = $pdo->query("SELECT * FROM products");
     while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -355,13 +362,19 @@ try {
             }
         }
 
+        $prod_info = [
+            'id'        => $p_id,
+            'code'      => $code,
+            'name'      => $name,
+            'price'     => (float)$price,
+            'buy_price' => (float)$buy_price
+        ];
+
         if ($code !== null && trim((string)$code) !== '') {
-            $products_map[trim((string)$code)] = [
-                'id'        => $p_id,
-                'name'      => $name,
-                'price'     => (float)$price,
-                'buy_price' => (float)$buy_price
-            ];
+            $products_map[trim((string)$code)] = $prod_info;
+        }
+        if ($p_id > 0) {
+            $products_by_id[$p_id] = $prod_info;
         }
     }
 } catch (Exception $e) {}
@@ -796,6 +809,7 @@ try {
                         <?php foreach ($transactions as $tx): ?>
                             <?php 
                                 $t_code = getTxVal($tx, $code_candidates, $code_keywords);
+                                $t_id   = getTxVal($tx, $id_candidates, $id_keywords, null);
                                 $t_date = getTxVal($tx, $date_candidates, $date_keywords);
                                 $t_qty  = getTxVal($tx, $qty_candidates, $qty_keywords);
                                 $t_type = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
@@ -803,6 +817,16 @@ try {
                                 $t_desc = getTxVal($tx, $desc_candidates, $desc_keywords);
                                 $t_amt  = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
                                 $row_id = $tx[$pk_col] ?? reset($tx);
+
+                                // Fallback resolution for legacy/missing values
+                                if (($t_code === '-' || empty($t_code)) && $t_id && isset($products_by_id[$t_id])) {
+                                    $t_code = $products_by_id[$t_id]['code'];
+                                }
+                                if (($t_desc === '-' || is_numeric($t_desc)) && $t_code !== '-' && isset($products_map[$t_code])) {
+                                    $t_desc = $products_map[$t_code]['name'];
+                                } elseif (($t_desc === '-' || is_numeric($t_desc)) && $t_id && isset($products_by_id[$t_id])) {
+                                    $t_desc = $products_by_id[$t_id]['name'];
+                                }
                             ?>
                             <tr>
                                 <td><strong><?php echo htmlspecialchars((string)$t_code); ?></strong></td>
