@@ -108,34 +108,51 @@ try {
     $categories = [];
 }
 
-// Fetch Products List and dynamically calculate totals from stockout history
+// 1. Aggregation from stockout history table
+$stockout_totals_by_code = [];
+$stockout_totals_by_name = [];
+
 try {
-    $sql = '
-        SELECT 
-            p.*,
-            COALESCE(s.total_out, 0) AS aggregated_out
-        FROM products p
-        LEFT JOIN (
-            SELECT 
-                product_code, 
-                SUM(CAST(qty AS INTEGER)) AS total_out 
-            FROM stockout 
-            GROUP BY product_code
-        ) s ON p.product_code = s.product_code
-        ORDER BY p.product_name ASC
-    ';
-    $stmt = $pdo->query($sql);
-    $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    // Fallback if stockout table is empty or structured differently
-    try {
-        $stmt = $pdo->query('SELECT *, 0 AS aggregated_out FROM products ORDER BY product_name ASC');
-        $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $ex) {
-        $message = "Error fetching products: " . $ex->getMessage();
-        $message_type = "error";
-        $products = [];
+    $soStmt = $pdo->query("SELECT * FROM stockout");
+    $all_stockouts = $soStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($all_stockouts as $so) {
+        $qty = (int)($so['qty'] ?? $so['quantity'] ?? 0);
+        
+        $code = trim($so['product_code'] ?? $so['code'] ?? $so['barcode'] ?? '');
+        $name = strtolower(trim($so['description'] ?? $so['product_name'] ?? ''));
+
+        if (!empty($code)) {
+            $stockout_totals_by_code[$code] = ($stockout_totals_by_code[$code] ?? 0) + $qty;
+        }
+        if (!empty($name)) {
+            $stockout_totals_by_name[$name] = ($stockout_totals_by_name[$name] ?? 0) + $qty;
+        }
     }
+} catch (PDOException $e) {
+    // If stockout table is empty or unreadable, default gracefully
+}
+
+// 2. Fetch Products List and calculate totals matching by Barcode OR Product Name
+try {
+    $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
+    $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($products as &$p) {
+        $p_code = trim($p['product_code'] ?? '');
+        $p_name = strtolower(trim($p['product_name'] ?? ''));
+
+        $out_by_code = (!empty($p_code) && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
+        $out_by_name = (!empty($p_name) && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
+
+        // Match by barcode first; fallback to product name match
+        $p['aggregated_out'] = max($out_by_code, $out_by_name);
+    }
+    unset($p);
+} catch (PDOException $e) {
+    $message = "Error fetching products: " . $e->getMessage();
+    $message_type = "error";
+    $products = [];
 }
 ?>
 
@@ -291,7 +308,7 @@ try {
                                     $p_um     = $p['um'] ?? '';
                                     $p_in     = (int)($p['Stock_in'] ?? 0);
                                     
-                                    // Dynamically combine manual stock out with stockout transaction log totals
+                                    // Combine manually set Stock_out with aggregated stockout log totals
                                     $p_out    = (int)($p['Stock_out'] ?? 0) + (int)($p['aggregated_out'] ?? 0);
                                     
                                     // Compute remaining inventory (allows negative numbers)
