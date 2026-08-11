@@ -9,7 +9,17 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// --- HELPER FUNCTIONS FOR TYPE-SAFE COLUMN HANDLING ---
+// Safe 32-Bit Integer Helper (Prevents PostgreSQL 22003 overflow)
+function safeInt32($val, $fallback = 0) {
+    if (!is_numeric($val)) return $fallback;
+    $num = (float)$val;
+    if ($num > 2147483647 || $num < -2147483648) {
+        return $fallback;
+    }
+    return (int)$num;
+}
+
+// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION (HISTORY LOG) ---
 function getTxVal($row, $candidates, $keywords = [], $default = '-') {
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
@@ -53,19 +63,28 @@ try {
     }
 } catch (Exception $e) {}
 
-// Data Type Verification Helpers
+function is32BitIntType($cname, $tx_col_types) {
+    $c_lower = strtolower($cname);
+    if (!isset($tx_col_types[$c_lower])) return false;
+    $dt = $tx_col_types[$c_lower];
+    return (strpos($dt, 'int') !== false || strpos($dt, 'serial') !== false) 
+           && strpos($dt, 'bigint') === false 
+           && strpos($dt, 'int8') === false 
+           && strpos($dt, 'bigserial') === false;
+}
+
+function isBigIntType($cname, $tx_col_types) {
+    $c_lower = strtolower($cname);
+    if (!isset($tx_col_types[$c_lower])) return false;
+    $dt = $tx_col_types[$c_lower];
+    return (strpos($dt, 'bigint') !== false || strpos($dt, 'int8') !== false || strpos($dt, 'bigserial') !== false);
+}
+
 function isTextType($cname, $tx_col_types) {
     $c_lower = strtolower($cname);
     if (!isset($tx_col_types[$c_lower])) return true;
     $dt = $tx_col_types[$c_lower];
     return (strpos($dt, 'char') !== false || strpos($dt, 'text') !== false || strpos($dt, 'varchar') !== false || strpos($dt, 'string') !== false);
-}
-
-function isIntType($cname, $tx_col_types) {
-    $c_lower = strtolower($cname);
-    if (!isset($tx_col_types[$c_lower])) return false;
-    $dt = $tx_col_types[$c_lower];
-    return (strpos($dt, 'int') !== false || strpos($dt, 'serial') !== false);
 }
 
 function findAllMatchingColumns($candidates, $keywords, $tx_columns, $exclude_cols = []) {
@@ -104,7 +123,7 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     return !empty($matches) ? $matches[0] : null;
 }
 
-// Field Mappings
+// Field Candidates
 $code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
 $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
@@ -112,7 +131,7 @@ $id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
 $id_keywords     = ['product_id', 'item_id'];
 
 $desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
-$desc_keywords   = ['desc', 'particular', 'remark'];
+$desc_keywords   = ['desc', 'particular', 'remark', 'name', 'product', 'item'];
 
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
@@ -172,7 +191,6 @@ try {
     $customer_list = array_values(array_unique($customer_list));
 } catch (Exception $e) {}
 
-
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
     $tx_type = $_POST['tx_type'] ?? 'Cash';
@@ -196,30 +214,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                 $insert_data = [];
 
-                // Populate Description ONLY into Text/Varchar columns
+                // Description -> Text/Varchar columns
                 foreach ($all_desc_cols as $d_col) {
                     if (isTextType($d_col, $tx_col_types)) {
                         $insert_data[$d_col] = $desc;
                     }
                 }
 
-                // Populate Code/Barcode according to column data type
+                // Barcode / Code column assignment (Prevents 32-bit INT overflow)
                 foreach ($all_code_cols as $c_col) {
-                    if (isIntType($c_col, $tx_col_types)) {
-                        $insert_data[$c_col] = is_numeric($barcode) ? (int)$barcode : 0;
+                    if (is32BitIntType($c_col, $tx_col_types)) {
+                        $insert_data[$c_col] = safeInt32($prod_id, safeInt32($barcode, 0));
                     } else {
                         $insert_data[$c_col] = $barcode;
                     }
                 }
 
-                // Populate Integer Product/Item ID columns
+                // Product / Item ID column assignment
                 foreach ($all_id_cols as $id_col) {
-                    if (isIntType($id_col, $tx_col_types)) {
+                    if (is32BitIntType($id_col, $tx_col_types)) {
+                        $insert_data[$id_col] = safeInt32($prod_id, 0);
+                    } elseif (isBigIntType($id_col, $tx_col_types)) {
                         $insert_data[$id_col] = $prod_id > 0 ? $prod_id : (is_numeric($barcode) ? (int)$barcode : 0);
+                    } else {
+                        $insert_data[$id_col] = $prod_id > 0 ? $prod_id : $barcode;
                     }
                 }
 
-                // Populate Customer Name (Text columns only)
+                // Customer Name -> Text columns
                 foreach ($all_cust_cols as $cu_col) {
                     if (isTextType($cu_col, $tx_col_types)) {
                         $insert_data[$cu_col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '';
@@ -264,7 +286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 } catch (Exception $e) {}
 
-                // Strictly strip any generated columns prior to INSERT
+                // Strictly strip generated columns prior to INSERT
                 foreach ($generated_cols as $gcol) {
                     foreach ($insert_data as $ik => $iv) {
                         if (strtolower($ik) === $gcol) {
