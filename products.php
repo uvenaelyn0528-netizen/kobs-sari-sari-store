@@ -108,62 +108,83 @@ try {
     $categories = [];
 }
 
-// 1. Fetch stockout totals across candidate tables (stockout, transactions, sales)
+// 1. DYNAMIC STOCKOUT SCANNER: Auto-detects tables to bypass Supabase naming/casing issues
 $stockout_totals_by_code = [];
 $stockout_totals_by_name = [];
 
-$candidate_tables = ['stockout', 'transactions', 'sales', 'stock_out', 'stockouts', 'transaction_history'];
+try {
+    // Fetch a list of all tables in the database
+    $tableStmt = $pdo->query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
+    $public_tables = $tableStmt->fetchAll(PDO::FETCH_COLUMN);
 
-foreach ($candidate_tables as $tbl) {
-    try {
-        $soStmt = $pdo->query("SELECT * FROM {$tbl}");
-        $rows = $soStmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($public_tables as $tbl) {
+        // Skip irrelevant or inventory tables to prevent data loops
+        if (in_array(strtolower($tbl), ['products', 'users', 'customers', 'category', 'categories'])) {
+            continue;
+        }
 
-        if (!empty($rows)) {
-            foreach ($rows as $raw_row) {
-                $row = array_change_key_case($raw_row, CASE_LOWER);
+        // Quote the identifier to strictly handle PostgreSQL casing (e.g. "StockOut")
+        $quoted_tbl = '"' . $tbl . '"';
+        
+        try {
+            $soStmt = $pdo->query("SELECT * FROM {$quoted_tbl}");
+            $rows = $soStmt->fetchAll(PDO::FETCH_ASSOC);
 
-                // Read quantity
-                $qty = 0;
-                foreach (['qty', 'quantity', 'count'] as $qk) {
-                    if (isset($row[$qk]) && is_numeric($row[$qk])) {
-                        $qty = (int)$row[$qk];
-                        break;
+            if (!empty($rows)) {
+                foreach ($rows as $raw_row) {
+                    // Standardize columns for easy reading
+                    $row = array_change_key_case($raw_row, CASE_LOWER);
+                    
+                    // Identify if this row has transaction quantity data
+                    $qty = 0;
+                    $has_qty = false;
+                    foreach (['qty', 'quantity', 'count', 'amount_sold'] as $qk) {
+                        if (isset($row[$qk])) {
+                            // Strip string text just in case (e.g., "1 pc" -> 1)
+                            $clean_qty = preg_replace('/[^0-9.-]/', '', (string)$row[$qk]);
+                            if ($clean_qty !== '' && is_numeric($clean_qty)) {
+                                $qty = (int)$clean_qty;
+                                $has_qty = true;
+                                break;
+                            }
+                        }
                     }
-                }
 
-                // Read product barcode / code
-                $code = '';
-                foreach (['code', 'product_code', 'barcode', 'item_code'] as $ck) {
-                    if (!empty($row[$ck])) {
-                        $code = preg_replace('/\s+/', '', (string)$row[$ck]);
-                        break;
+                    if ($has_qty) {
+                        // Detect item code
+                        $code = '';
+                        foreach (['code', 'product_code', 'barcode', 'item_code'] as $ck) {
+                            if (!empty($row[$ck])) {
+                                $code = preg_replace('/\s+/', '', (string)$row[$ck]);
+                                break;
+                            }
+                        }
+
+                        // Detect item description
+                        $name = '';
+                        foreach (['description', 'product_name', 'item_name', 'name'] as $nk) {
+                            if (!empty($row[$nk])) {
+                                $name = strtolower(trim((string)$row[$nk]));
+                                break;
+                            }
+                        }
+
+                        // Tally the totals up
+                        if ($code !== '') $stockout_totals_by_code[$code] = ($stockout_totals_by_code[$code] ?? 0) + $qty;
+                        if ($name !== '') $stockout_totals_by_name[$name] = ($stockout_totals_by_name[$name] ?? 0) + $qty;
                     }
-                }
-
-                // Read description / product name
-                $name = '';
-                foreach (['description', 'product_name', 'item_name', 'name'] as $nk) {
-                    if (!empty($row[$nk])) {
-                        $name = strtolower(trim((string)$row[$nk]));
-                        break;
-                    }
-                }
-
-                if ($code !== '') {
-                    $stockout_totals_by_code[$code] = ($stockout_totals_by_code[$code] ?? 0) + $qty;
-                }
-                if ($name !== '') {
-                    $stockout_totals_by_name[$name] = ($stockout_totals_by_name[$name] ?? 0) + $qty;
                 }
             }
+        } catch (PDOException $e) {
+            // Silently continue if a specific table is restricted
+            continue; 
         }
-    } catch (PDOException $e) {
-        continue;
     }
+} catch (PDOException $e) {
+    // Database schema search blocked, fail gracefully
 }
 
-// 2. Fetch Products and attach live aggregate stockout totals
+// 2. Fetch Products and attach live stockout aggregates
 try {
     $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -174,6 +195,7 @@ try {
         $p_code = preg_replace('/\s+/', '', (string)($p_lower['product_code'] ?? $p_lower['code'] ?? $p_lower['barcode'] ?? ''));
         $p_name = strtolower(trim((string)($p_lower['product_name'] ?? $p_lower['name'] ?? '')));
 
+        // Check if the exact barcode OR the exact product name matches
         $out_by_code = ($p_code !== '' && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
         $out_by_name = ($p_name !== '' && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
 
@@ -311,7 +333,7 @@ try {
             <p class="text-xs text-gray-500 mb-4"><?= $is_viewer ? 'Viewing inventory list records.' : 'Click any row or use the Action button to load product details into the edit form.' ?></p>
             
             <div class="max-h-[600px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg pb-2">
-                <table class="min-w-[850px] w-full divide-y divide-gray-200">
+                <table class="min-w-[950px] w-full divide-y divide-gray-200">
                     <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
                         <tr>
                             <?php if (!$is_viewer): ?>
@@ -340,10 +362,10 @@ try {
                                     $p_um     = $p_lower['um'] ?? '';
                                     $p_in     = (int)($p_lower['stock_in'] ?? 0);
                                     
-                                    // Total Out = Manual Stock_out + Live transaction stockouts
+                                    // Math computation: Total Out = Manual Stock_out + Auto-Detected Transactions
                                     $p_out    = (int)($p_lower['stock_out'] ?? 0) + (int)($p['live_stock_out'] ?? 0);
                                     
-                                    // Remaining Qty
+                                    // Math computation: Remaining Qty
                                     $p_qty    = $p_in - $p_out; 
                                     $p_ret    = (float)($p_lower['retail_price'] ?? 0);
                                     $amount   = $p_qty * $p_ret; 
