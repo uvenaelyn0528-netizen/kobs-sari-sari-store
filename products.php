@@ -108,47 +108,62 @@ try {
     $categories = [];
 }
 
-// 1. Fetch and aggregate stockout history safely across potential database table variations
+// 1. Fetch stockout totals across candidate tables (stockout, transactions, sales)
 $stockout_totals_by_code = [];
 $stockout_totals_by_name = [];
 
-$possible_tables = ['stockout', 'stock_out', 'stockouts', '"stockout"', '"Stockout"'];
+$candidate_tables = ['stockout', 'transactions', 'sales', 'stock_out', 'stockouts', 'transaction_history'];
 
-foreach ($possible_tables as $tbl) {
+foreach ($candidate_tables as $tbl) {
     try {
         $soStmt = $pdo->query("SELECT * FROM {$tbl}");
-        $all_stockouts = $soStmt->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $soStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        if (!empty($all_stockouts)) {
-            foreach ($all_stockouts as $raw_so) {
-                // Standardize column key names to lower case for case-insensitive lookup
-                $so = array_change_key_case($raw_so, CASE_LOWER);
+        if (!empty($rows)) {
+            foreach ($rows as $raw_row) {
+                $row = array_change_key_case($raw_row, CASE_LOWER);
 
-                $qty = (int)($so['qty'] ?? $so['quantity'] ?? $so['count'] ?? 0);
-                
-                // Read barcode/code variations
-                $raw_code = $so['code'] ?? $so['product_code'] ?? $so['barcode'] ?? $so['item_code'] ?? '';
-                $clean_code = preg_replace('/\s+/', '', (string)$raw_code);
-
-                // Read description/product name variations
-                $raw_name = $so['description'] ?? $so['product_name'] ?? $so['item_name'] ?? '';
-                $clean_name = strtolower(trim((string)$raw_name));
-
-                if ($clean_code !== '') {
-                    $stockout_totals_by_code[$clean_code] = ($stockout_totals_by_code[$clean_code] ?? 0) + $qty;
+                // Read quantity
+                $qty = 0;
+                foreach (['qty', 'quantity', 'count'] as $qk) {
+                    if (isset($row[$qk]) && is_numeric($row[$qk])) {
+                        $qty = (int)$row[$qk];
+                        break;
+                    }
                 }
-                if ($clean_name !== '') {
-                    $stockout_totals_by_name[$clean_name] = ($stockout_totals_by_name[$clean_name] ?? 0) + $qty;
+
+                // Read product barcode / code
+                $code = '';
+                foreach (['code', 'product_code', 'barcode', 'item_code'] as $ck) {
+                    if (!empty($row[$ck])) {
+                        $code = preg_replace('/\s+/', '', (string)$row[$ck]);
+                        break;
+                    }
+                }
+
+                // Read description / product name
+                $name = '';
+                foreach (['description', 'product_name', 'item_name', 'name'] as $nk) {
+                    if (!empty($row[$nk])) {
+                        $name = strtolower(trim((string)$row[$nk]));
+                        break;
+                    }
+                }
+
+                if ($code !== '') {
+                    $stockout_totals_by_code[$code] = ($stockout_totals_by_code[$code] ?? 0) + $qty;
+                }
+                if ($name !== '') {
+                    $stockout_totals_by_name[$name] = ($stockout_totals_by_name[$name] ?? 0) + $qty;
                 }
             }
-            break; // Stop loop once data is successfully fetched
         }
     } catch (PDOException $e) {
         continue;
     }
 }
 
-// 2. Fetch Products List and match barcode / product name dynamically
+// 2. Fetch Products and attach live aggregate stockout totals
 try {
     $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -162,8 +177,7 @@ try {
         $out_by_code = ($p_code !== '' && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
         $out_by_name = ($p_name !== '' && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
 
-        // Use highest calculated total from barcode or description match
-        $p['aggregated_out'] = max($out_by_code, $out_by_name);
+        $p['live_stock_out'] = max($out_by_code, $out_by_name);
     }
     unset($p);
 } catch (PDOException $e) {
@@ -326,10 +340,10 @@ try {
                                     $p_um     = $p_lower['um'] ?? '';
                                     $p_in     = (int)($p_lower['stock_in'] ?? 0);
                                     
-                                    // Manual Stock_out plus live dynamic stockouts
-                                    $p_out    = (int)($p_lower['stock_out'] ?? 0) + (int)($p['aggregated_out'] ?? 0);
+                                    // Total Out = Manual Stock_out + Live transaction stockouts
+                                    $p_out    = (int)($p_lower['stock_out'] ?? 0) + (int)($p['live_stock_out'] ?? 0);
                                     
-                                    // Compute remaining quantity
+                                    // Remaining Qty
                                     $p_qty    = $p_in - $p_out; 
                                     $p_ret    = (float)($p_lower['retail_price'] ?? 0);
                                     $amount   = $p_qty * $p_ret; 
