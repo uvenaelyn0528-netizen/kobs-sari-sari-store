@@ -2,7 +2,7 @@
 session_start();
 require_once 'db.php';
 
-// Allow 'admin', 'tindera', and 'viewer' to open the page
+// Allow 'admin', 'tindera', and 'viewer' to access
 if (!isset($_SESSION['role']) || !in_array($_SESSION['role'], ['admin', 'tindera', 'viewer'])) {
     header("Location: login.php");
     exit();
@@ -18,7 +18,7 @@ $edit_product = null;
 $message = '';
 $message_type = '';
 
-// Handle Delete Product (Blocked for viewers)
+// Handle Delete Product
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_product'])) {
     $del_id = $_POST['original_id'] ?? '';
     if (!empty($del_id)) {
@@ -36,7 +36,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete
     }
 }
 
-// Handle Add Product Submission (Blocked for viewers)
+// Handle Add Product Submission
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
     $code          = trim($_POST['product_code'] ?? '');
     $name          = $_POST['product_name'] ?? '';
@@ -46,7 +46,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_pr
     $retail_price  = $_POST['retail_price'] ?? 0;
     $stock_in      = $_POST['stock_in'] ?? 0;
     $stock_out     = $_POST['stock_out'] ?? 0;
-    $stock_qty     = $stock_in - $stock_out; // Calculate remaining directly
+    $stock_qty     = $stock_in - $stock_out;
 
     try {
         $stmt = $pdo->prepare('INSERT INTO products (product_code, product_name, category, um, "Stock_in", "Stock_out", stock_qty, buy_price, retail_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -59,7 +59,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_pr
     }
 }
 
-// Handle Update Product Submission (Blocked for viewers)
+// Handle Update Product Submission
 if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_product'])) {
     $code          = trim($_POST['product_code'] ?? '');
     $name          = $_POST['product_name'] ?? '';
@@ -69,7 +69,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update
     $retail_price  = $_POST['retail_price'] ?? 0;
     $stock_in      = $_POST['stock_in'] ?? 0;
     $stock_out     = $_POST['stock_out'] ?? 0;
-    $stock_qty     = $stock_in - $stock_out; // Calculate remaining directly
+    $stock_qty     = $stock_in - $stock_out;
     $original_id   = $_POST['original_id'] ?? '';
 
     try {
@@ -85,7 +85,7 @@ if (!$is_viewer && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update
     }
 }
 
-// Handle Edit Trigger via URL (Blocked for viewers)
+// Handle Edit Trigger via URL
 if (!$is_viewer && isset($_GET['edit']) && !empty($_GET['edit'])) {
     $edit_id = $_GET['edit'];
     try {
@@ -108,14 +108,34 @@ try {
     $categories = [];
 }
 
-// Fetch Products List with dynamic transaction sums if applicable
+// Fetch Products List and dynamically calculate totals from stockout history
 try {
-    $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
+    $sql = '
+        SELECT 
+            p.*,
+            COALESCE(s.total_out, 0) AS aggregated_out
+        FROM products p
+        LEFT JOIN (
+            SELECT 
+                product_code, 
+                SUM(CAST(qty AS INTEGER)) AS total_out 
+            FROM stockout 
+            GROUP BY product_code
+        ) s ON p.product_code = s.product_code
+        ORDER BY p.product_name ASC
+    ';
+    $stmt = $pdo->query($sql);
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    $message = "Error fetching products: " . $e->getMessage();
-    $message_type = "error";
-    $products = [];
+    // Fallback if stockout table is empty or structured differently
+    try {
+        $stmt = $pdo->query('SELECT *, 0 AS aggregated_out FROM products ORDER BY product_name ASC');
+        $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $ex) {
+        $message = "Error fetching products: " . $ex->getMessage();
+        $message_type = "error";
+        $products = [];
+    }
 }
 ?>
 
@@ -138,7 +158,7 @@ try {
 
     <?php if ($is_viewer): ?>
         <div class="mb-6 p-4 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
-            <strong>Viewer Mode:</strong> You are logged in with a viewer account. You can view the product inventory list, but transaction forms and modifications are restricted.
+            <strong>Viewer Mode:</strong> You are logged in with a viewer account. You can view the product inventory list, but modifications are restricted.
         </div>
     <?php endif; ?>
 
@@ -200,7 +220,7 @@ try {
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-700">Remaining Qty</label>
-                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars($edit_product['stock_qty'] ?? 0) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
+                        <input type="number" id="stock_qty_input" name="stock_qty" required <?= $is_viewer ? 'disabled' : '' ?> value="<?= htmlspecialchars(($edit_product['Stock_in'] ?? 0) - ($edit_product['Stock_out'] ?? 0)) ?>" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border <?= $is_viewer ? 'bg-gray-100 cursor-not-allowed' : '' ?>">
                     </div>
                 </div>
 
@@ -269,10 +289,14 @@ try {
                                     $p_name   = $p['product_name'] ?? '';
                                     $p_cat    = $p['category'] ?? 'Uncategorized';
                                     $p_um     = $p['um'] ?? '';
-                                    $p_in     = $p['Stock_in'] ?? 0;
-                                    $p_out    = $p['Stock_out'] ?? 0;
-                                    $p_qty    = $p_in - $p_out; // Calculates negative values properly
-                                    $p_ret    = $p['retail_price'] ?? 0;
+                                    $p_in     = (int)($p['Stock_in'] ?? 0);
+                                    
+                                    // Dynamically combine manual stock out with stockout transaction log totals
+                                    $p_out    = (int)($p['Stock_out'] ?? 0) + (int)($p['aggregated_out'] ?? 0);
+                                    
+                                    // Compute remaining inventory (allows negative numbers)
+                                    $p_qty    = $p_in - $p_out; 
+                                    $p_ret    = (float)($p['retail_price'] ?? 0);
                                     $amount   = $p_qty * $p_ret; 
                                 ?>
                                 <tr <?= !$is_viewer ? "onclick=\"window.location.href='products.php?edit=" . urlencode($p_id) . "'\" class=\"cursor-pointer transition hover:bg-indigo-50\"" : "class=\"transition hover:bg-gray-50\"" ?>>
@@ -286,7 +310,7 @@ try {
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_cat) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_um) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_in) ?></td>
-                                    <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_out) ?></td>
+                                    <td class="px-3 py-3 font-semibold text-orange-600 whitespace-nowrap"><?= htmlspecialchars($p_out) ?></td>
                                     <td class="px-3 py-3 font-bold whitespace-nowrap <?= $p_qty <= 0 ? 'text-red-600' : 'text-gray-800' ?>">
                                         <?= htmlspecialchars($p_qty) ?>
                                     </td>
@@ -331,7 +355,7 @@ document.getElementById('product_code_input').addEventListener('input', function
     }
 });
 
-// Auto-compute remaining quantity (allows negative numbers)
+// Auto-compute remaining quantity (supports negative values)
 function calculateRemaining() {
     let stockIn = parseFloat(document.getElementById('stock_in_input').value) || 0;
     let stockOut = parseFloat(document.getElementById('stock_out_input').value) || 0;
