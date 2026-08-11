@@ -9,9 +9,9 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// Safe 32-Bit Integer Helper (Prevents PostgreSQL 22003/22P02 overflow)
-function safeInt32($val, $fallback = 0) {
-    if (!is_numeric($val) || $val === null || $val === '' || $val === '-') return $fallback;
+// Safe 32-Bit Integer Helper (Prevents PostgreSQL integer overflow/FK violations)
+function safeInt32($val, $fallback = null) {
+    if (!is_numeric($val) || $val === null || $val === '' || $val === '-' || (int)$val === 0) return $fallback;
     $num = (float)$val;
     if ($num > 2147483647 || $num < -2147483648) {
         return $fallback;
@@ -19,9 +19,8 @@ function safeInt32($val, $fallback = 0) {
     return (int)$num;
 }
 
-// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION (HISTORY LOG) ---
+// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION ---
 function getTxVal($row, $candidates, $keywords = [], $default = '-') {
-    // 1. Exact candidate match
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
             if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
@@ -29,7 +28,6 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
             }
         }
     }
-    // 2. Keyword substring match (excluding _id columns for non-ID fields)
     foreach ($keywords as $kw) {
         foreach ($row as $col_name => $val) {
             $col_lower = strtolower($col_name);
@@ -103,7 +101,7 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     return null;
 }
 
-// Field Candidates
+// Column candidate field maps
 $code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
 $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
@@ -130,7 +128,7 @@ $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
 $pk_col = $tx_columns[0] ?? 'id';
 
-// --- 2. PRE-DETECT COLUMNS IN 'PRODUCTS' TABLE ---
+// --- 2. PRE-DETECT PRODUCTS & CUSTOMERS TABLES ---
 $prod_qty_col = null;
 $prod_code_col = null;
 
@@ -143,26 +141,72 @@ try {
     }
 } catch (Exception $e) {}
 
-// Customer list for dropdown
-$customer_list = [];
-$col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
+// Populate Customer List directly from 'customers' table
+$customers_data = [];
+$customers_map  = []; // Name to ID lookup
+
 try {
-    if ($col_cust) {
-        $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != '' AND {$col_cust} != '-'");
-        while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
-            if (!empty($row[0])) $customer_list[] = trim($row[0]);
+    $c_stmt = $pdo->query("SELECT * FROM customers ORDER BY 1 ASC");
+    if ($c_stmt) {
+        while ($crow = $c_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $cid = null;
+            $cname = null;
+            foreach ($crow as $k => $v) {
+                $k_lower = strtolower($k);
+                if (($k_lower === 'id' || $k_lower === 'customer_id' || $k_lower === 'cust_id') && is_numeric($v)) {
+                    $cid = (int)$v;
+                }
+                if (($k_lower === 'name' || $k_lower === 'customer_name' || $k_lower === 'full_name' || $k_lower === 'fullname') && !empty(trim((string)$v))) {
+                    $cname = trim((string)$v);
+                }
+            }
+            if ($cname) {
+                $customers_data[] = ['id' => $cid, 'name' => $cname];
+                if ($cid) {
+                    $customers_map[strtolower($cname)] = $cid;
+                }
+            }
         }
     }
-    $customer_list = array_values(array_unique($customer_list));
 } catch (Exception $e) {}
+
+// Fallback: Populate customer names from transactions history if customers table is empty
+if (empty($customers_data)) {
+    $col_cust = findSingleColumn($cust_candidates, $cust_keywords, $tx_columns);
+    try {
+        if ($col_cust) {
+            $c_stmt = $pdo->query("SELECT DISTINCT {$col_cust} FROM transactions WHERE {$col_cust} IS NOT NULL AND {$col_cust} != '' AND {$col_cust} != '-'");
+            while ($row = $c_stmt->fetch(PDO::FETCH_NUM)) {
+                if (!empty($row[0])) {
+                    $cname = trim($row[0]);
+                    $customers_data[] = ['id' => null, 'name' => $cname];
+                }
+            }
+        }
+    } catch (Exception $e) {}
+}
 
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
     $tx_type = $_POST['tx_type'] ?? 'Cash';
     $customer_name = trim($_POST['customer_name'] ?? '');
+    $selected_cust_id = !empty($_POST['customer_id_val']) ? (int)$_POST['customer_id_val'] : null;
     $tx_date = $_POST['tx_date'] ?? $today;
     $items_raw = $_POST['items_payload'] ?? '[]';
     $items = json_decode($items_raw, true);
+
+    // Dynamic resolution for customer_id
+    if (!$selected_cust_id && !empty($customer_name)) {
+        $c_lower = strtolower($customer_name);
+        if (isset($customers_map[$c_lower])) {
+            $selected_cust_id = $customers_map[$c_lower];
+        }
+    }
+
+    if ($tx_type === 'Cash') {
+        $selected_cust_id = null;
+        $customer_name = '-';
+    }
 
     if (!empty($items) && is_array($items)) {
         try {
@@ -191,7 +235,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         $insert_data[$col] = $barcode;
                     }
 
-                    // Item Description / Product Name assignment
+                    // Item Description assignment
                     elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
                         $insert_data[$col] = (string)$desc;
                     }
@@ -201,9 +245,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
 
-                    // Customer Name
+                    // Foreign Key Customer ID & Customer Name
+                    elseif ($c === 'customer_id') {
+                        $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
+                    }
                     elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || strpos($c, 'cust') !== false) {
-                        $insert_data[$col] = ($tx_type === 'Credit' || $tx_type === 'Payment') ? $customer_name : '-';
+                        if (substr($c, -3) === '_id') {
+                            $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
+                        } else {
+                            $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
+                        }
                     }
 
                     // Quantities, Amounts, Prices, Date, Type
@@ -227,47 +278,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Non-nullable column default handling
+                // Default assignment for unmapped columns
                 try {
                     $nn_stmt = $pdo->query("
-                        SELECT column_name, data_type 
+                        SELECT column_name, data_type, is_nullable 
                         FROM information_schema.columns 
                         WHERE lower(table_name) = 'transactions' 
-                          AND table_schema = 'public' 
-                          AND is_nullable = 'NO' 
-                          AND column_default IS NULL
+                          AND table_schema = 'public'
                     ");
                     while ($nn_row = $nn_stmt->fetch(PDO::FETCH_ASSOC)) {
                         $c_name = $nn_row['column_name'];
-                        if (in_array(strtolower($c_name), $generated_cols) || strtolower($c_name) === strtolower($pk_col)) continue;
+                        $c_lower = strtolower($c_name);
 
-                        if (!array_key_exists($c_name, $insert_data) || $insert_data[$c_name] === null) {
+                        if (in_array($c_lower, $generated_cols) || $c_lower === strtolower($pk_col)) continue;
+
+                        if (!array_key_exists($c_name, $insert_data)) {
                             $dtype = strtolower($nn_row['data_type']);
-                            if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
-                                $insert_data[$c_name] = 0;
-                            } elseif (strpos($dtype, 'bool') !== false) {
-                                $insert_data[$c_name] = false;
-                            } elseif (strpos($dtype, 'date') !== false || strpos($dtype, 'time') !== false) {
-                                $insert_data[$c_name] = $tx_date;
+                            $is_nullable = strtoupper($nn_row['is_nullable']) === 'YES';
+
+                            if (substr($c_lower, -3) === '_id' || $c_lower === 'customer_id' || $c_lower === 'product_id') {
+                                $insert_data[$c_name] = null;
+                            } elseif ($is_nullable) {
+                                $insert_data[$c_name] = null;
                             } else {
-                                $insert_data[$c_name] = '-';
+                                if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
+                                    $insert_data[$c_name] = 0;
+                                } elseif (strpos($dtype, 'bool') !== false) {
+                                    $insert_data[$c_name] = false;
+                                } elseif (strpos($dtype, 'date') !== false || strpos($dtype, 'time') !== false) {
+                                    $insert_data[$c_name] = $tx_date;
+                                } else {
+                                    $insert_data[$c_name] = '-';
+                                }
                             }
                         }
                     }
                 } catch (Exception $e) {}
 
-                // STRICT DATA TYPE SANITIZATION FOR POSTGRESQL
+                // STRICT FOREIGN KEY & DATA TYPE SANITIZATION
                 foreach ($insert_data as $f_col => $f_val) {
+                    $c_lower = strtolower($f_col);
+                    $is_fk_or_id = (substr($c_lower, -3) === '_id' || $c_lower === 'id' || in_array($c_lower, array_map('strtolower', $id_candidates)));
+
                     if (isIntColumn($f_col, $tx_col_types)) {
-                        if ($f_val === null || $f_val === '' || $f_val === '-') {
-                            $insert_data[$f_col] = 0;
+                        if ($is_fk_or_id) {
+                            $insert_data[$f_col] = safeInt32($f_val, null); // Convert 0 to NULL
                         } else {
-                            $insert_data[$f_col] = safeInt32($f_val, 0);
+                            $insert_data[$f_col] = (int)$f_val;
                         }
                     }
                 }
 
-                // Build & execute INSERT query
+                // Execute INSERT query
                 $fields = array_keys($insert_data);
                 $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
 
@@ -280,7 +342,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct stock from products table
+                // Deduct stock from products
                 if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -413,9 +475,7 @@ try {
             color: var(--text-dark);
         }
 
-        .back-btn-container {
-            margin-bottom: 15px;
-        }
+        .back-btn-container { margin-bottom: 15px; }
 
         .back-to-store-btn {
             display: inline-flex;
@@ -468,11 +528,7 @@ try {
             margin-bottom: 6px;
         }
 
-        .stat-card .amount {
-            font-size: 24px;
-            font-weight: 800;
-        }
-
+        .stat-card .amount { font-size: 24px; font-weight: 800; }
         .stat-card.yellow .amount { color: #854d0e; }
         .stat-card.green .amount { color: #15803d; }
         .stat-card.blue .amount { color: #1d4ed8; }
@@ -500,9 +556,7 @@ try {
             color: var(--text-dark);
         }
 
-        .form-group {
-            margin-bottom: 14px;
-        }
+        .form-group { margin-bottom: 14px; }
 
         .form-group label {
             display: block;
@@ -523,9 +577,7 @@ try {
             transition: border-color 0.2s;
         }
 
-        .form-control:focus {
-            border-color: var(--primary-blue);
-        }
+        .form-control:focus { border-color: var(--primary-blue); }
 
         .scan-row {
             display: grid;
@@ -545,9 +597,7 @@ try {
             font-size: 16px;
         }
 
-        .add-btn:hover {
-            background-color: var(--primary-hover);
-        }
+        .add-btn:hover { background-color: var(--primary-hover); }
 
         .cart-box {
             margin: 15px 0;
@@ -600,17 +650,8 @@ try {
             margin-bottom: 16px;
         }
 
-        .cart-summary .label {
-            font-size: 13px;
-            font-weight: 600;
-            color: #1e40af;
-        }
-
-        .cart-summary .total-value {
-            font-size: 20px;
-            font-weight: 800;
-            color: #1e3a8a;
-        }
+        .cart-summary .label { font-size: 13px; font-weight: 600; color: #1e40af; }
+        .cart-summary .total-value { font-size: 20px; font-weight: 800; color: #1e3a8a; }
 
         .process-btn {
             width: 100%;
@@ -625,9 +666,7 @@ try {
             transition: background-color 0.2s;
         }
 
-        .process-btn:hover {
-            background-color: #4338ca;
-        }
+        .process-btn:hover { background-color: #4338ca; }
 
         .history-table {
             width: 100%;
@@ -672,9 +711,7 @@ try {
 <body>
 
     <div class="back-btn-container">
-        <a href="store.php" class="back-to-store-btn">
-            &larr; Back to Store
-        </a>
+        <a href="store.php" class="back-to-store-btn">&larr; Back to Store</a>
     </div>
 
     <!-- ALERTS -->
@@ -720,6 +757,7 @@ try {
             <form id="transactionForm" method="POST" action="stockout.php">
                 <input type="hidden" name="process_batch_transaction" value="1">
                 <input type="hidden" name="items_payload" id="items_payload" value="[]">
+                <input type="hidden" name="customer_id_val" id="customer_id_val" value="">
 
                 <div class="form-group">
                     <label>Transaction Type</label>
@@ -732,10 +770,10 @@ try {
 
                 <div class="form-group" id="customer_group" style="display: none;">
                     <label>Customer Name</label>
-                    <input type="text" name="customer_name" id="customer_name_input" class="form-control" list="customer_dropdown_list" placeholder="Select or type customer name" autocomplete="off">
+                    <input type="text" name="customer_name" id="customer_name_input" class="form-control" list="customer_dropdown_list" placeholder="Select or type customer name" autocomplete="off" onchange="onCustomerSelect(this.value)">
                     <datalist id="customer_dropdown_list">
-                        <?php foreach ($customer_list as $cname): ?>
-                            <option value="<?php echo htmlspecialchars($cname); ?>"></option>
+                        <?php foreach ($customers_data as $c): ?>
+                            <option value="<?php echo htmlspecialchars($c['name']); ?>" data-id="<?php echo $c['id'] ?? ''; ?>"><?php echo htmlspecialchars($c['name']); ?></option>
                         <?php endforeach; ?>
                     </datalist>
                 </div>
@@ -818,7 +856,6 @@ try {
                                 $t_amt  = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
                                 $row_id = $tx[$pk_col] ?? reset($tx);
 
-                                // Fallback resolution for legacy/missing values
                                 if (($t_code === '-' || empty($t_code)) && $t_id && isset($products_by_id[$t_id])) {
                                     $t_code = $products_by_id[$t_id]['code'];
                                 }
@@ -854,6 +891,7 @@ try {
 
     <script>
         const productDatabase = <?php echo json_encode($products_map); ?>;
+        const customersMap = <?php echo json_encode($customers_map); ?>;
         let cartItems = [];
 
         const barcodeInput = document.getElementById('barcode_input');
@@ -861,6 +899,7 @@ try {
         const cartBody = document.getElementById('cart_body');
         const grandTotalDisplay = document.getElementById('grand_total_display');
         const itemsPayload = document.getElementById('items_payload');
+        const customerIdVal = document.getElementById('customer_id_val');
 
         barcodeInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter') {
@@ -868,6 +907,15 @@ try {
                 addItemFromScan();
             }
         });
+
+        function onCustomerSelect(val) {
+            const cleanVal = val.trim().toLowerCase();
+            if (customersMap[cleanVal]) {
+                customerIdVal.value = customersMap[cleanVal];
+            } else {
+                customerIdVal.value = '';
+            }
+        }
 
         function addItemFromScan() {
             const code = barcodeInput.value.trim();
