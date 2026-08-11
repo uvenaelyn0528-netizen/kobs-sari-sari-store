@@ -109,17 +109,20 @@ try {
 }
 
 // -------------------------------------------------------------
-// UNIVERSAL DYNAMIC TRANSACTION & STOCKOUT SCANNER
+// STOCKOUT TRANSACTION LOG SCANNER & REFLECTOR
 // -------------------------------------------------------------
 $stockout_totals_by_code = [];
 $stockout_totals_by_name = [];
 
 try {
+    // Specifically target stockout / transaction history logs
+    $target_tables = ['stockout', 'stockouts', 'transactions', 'sales', 'order_items'];
+    
+    // Fallback: discover all public tables if specific log tables vary
     $tableStmt = $pdo->query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
     $public_tables = $tableStmt->fetchAll(PDO::FETCH_COLUMN);
 
     foreach ($public_tables as $tbl) {
-        // Skip main system tables to avoid looping
         if (in_array(strtolower($tbl), ['products', 'users', 'customers', 'category', 'categories'])) {
             continue;
         }
@@ -132,7 +135,7 @@ try {
                 foreach ($rows as $raw_row) {
                     $row = array_change_key_case($raw_row, CASE_LOWER);
 
-                    // Dynamically locate quantity / count / out value across any column name
+                    // Locate quantity/out metrics dynamically
                     $qty = 0;
                     foreach ($row as $col_key => $val) {
                         if (strpos($col_key, 'qty') !== false || strpos($col_key, 'quantity') !== false || strpos($col_key, 'count') !== false || strpos($col_key, 'out') !== false || strpos($col_key, 'sold') !== false) {
@@ -146,7 +149,7 @@ try {
 
                     if ($qty <= 0) continue;
 
-                    // Dynamically locate barcode / code or product name / description across any column name
+                    // Map transaction row to product code and product name accumulators
                     foreach ($row as $col_key => $val) {
                         if (!is_string($val) || trim($val) === '') continue;
 
@@ -167,10 +170,10 @@ try {
         }
     }
 } catch (PDOException $e) {
-    // Fail gracefully if schema inspection is restricted
+    // Fail gracefully if inspection restricted
 }
 
-// Fetch Products and attach live stockout aggregates
+// Fetch Products and merge live stockout logs from stockout.php activities
 try {
     $stmt = $pdo->query('SELECT * FROM products ORDER BY product_name ASC');
     $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -184,6 +187,7 @@ try {
         $out_by_code = ($p_code !== '' && isset($stockout_totals_by_code[$p_code])) ? $stockout_totals_by_code[$p_code] : 0;
         $out_by_name = ($p_name !== '' && isset($stockout_totals_by_name[$p_name])) ? $stockout_totals_by_name[$p_name] : 0;
 
+        // Reflect total stockouts logged in transaction/stockout history
         $p['live_stock_out'] = max($out_by_code, $out_by_name);
     }
     unset($p);
@@ -213,7 +217,7 @@ try {
 
     <?php if ($is_viewer): ?>
         <div class="mb-6 p-4 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
-            <strong>Viewer Mode:</strong> You are logged in with a viewer account. You can view the product inventory list, but modifications are restricted.
+            <strong>Viewer Mode:</strong> You are logged in with a viewer account. You can view product inventory lists and reflected stockout logs, but modifications are restricted.
         </div>
     <?php endif; ?>
 
@@ -312,10 +316,10 @@ try {
             </form>
         </div>
 
-        <!-- Product List Table -->
+        <!-- Inventory List Table with Reflected Stockout Logs -->
         <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
-            <h2 class="text-lg font-bold text-gray-800 mb-1">Inventory List</h2>
-            <p class="text-xs text-gray-500 mb-4"><?= $is_viewer ? 'Viewing inventory list records.' : 'Click any row or use the Action button to load product details into the edit form.' ?></p>
+            <h2 class="text-lg font-bold text-gray-800 mb-1">Inventory List & Stockout Logs</h2>
+            <p class="text-xs text-gray-500 mb-4"><?= $is_viewer ? 'Viewing synchronized inventory records.' : 'Reflects automatic subtractions from stockout.php transaction logs in real time.' ?></p>
             
             <div class="max-h-[600px] overflow-x-auto overflow-y-auto border border-gray-200 rounded-lg pb-2">
                 <table class="min-w-[950px] w-full divide-y divide-gray-200">
@@ -329,7 +333,7 @@ try {
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Category</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">UM</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">In</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Out</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Out (Logs)</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Remaining</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Retail</th>
                             <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Amount</th>
@@ -347,10 +351,10 @@ try {
                                     $p_um     = $p_lower['um'] ?? '';
                                     $p_in     = (int)($p_lower['stock_in'] ?? 0);
                                     
-                                    // Total Out = Manual Stock_out + Live transaction stockouts
+                                    // Combine manual stock out + reflected stockout.php logs
                                     $p_out    = (int)($p_lower['stock_out'] ?? 0) + (int)($p['live_stock_out'] ?? 0);
                                     
-                                    // Remaining Qty
+                                    // Compute final remaining quantity
                                     $p_qty    = $p_in - $p_out; 
                                     $p_ret    = (float)($p_lower['retail_price'] ?? 0);
                                     $amount   = $p_qty * $p_ret; 
@@ -366,7 +370,12 @@ try {
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_cat) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_um) ?></td>
                                     <td class="px-3 py-3 text-gray-600 whitespace-nowrap"><?= htmlspecialchars($p_in) ?></td>
-                                    <td class="px-3 py-3 font-semibold text-orange-600 whitespace-nowrap"><?= htmlspecialchars($p_out) ?></td>
+                                    <td class="px-3 py-3 font-semibold text-orange-600 whitespace-nowrap" title="Includes stockout.php logs">
+                                        <?= htmlspecialchars($p_out) ?>
+                                        <?php if (($p['live_stock_out'] ?? 0) > 0): ?>
+                                            <span class="text-[10px] bg-orange-100 text-orange-800 px-1 py-0.5 rounded ml-1">Live</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="px-3 py-3 font-bold whitespace-nowrap <?= $p_qty <= 0 ? 'text-red-600' : 'text-gray-800' ?>">
                                         <?= htmlspecialchars($p_qty) ?>
                                     </td>
