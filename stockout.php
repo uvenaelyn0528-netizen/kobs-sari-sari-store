@@ -10,8 +10,8 @@ $today = date('Y-m-d');
 $error_message = '';
 
 // Safe 32-Bit Integer Helper (Prevents PostgreSQL 22003 overflow)
-function safeInt32($val, $fallback = 0) {
-    if (!is_numeric($val)) return $fallback;
+function safeInt32($val, $fallback = null) {
+    if (!is_numeric($val) || $val === null) return $fallback;
     $num = (float)$val;
     if ($num > 2147483647 || $num < -2147483648) {
         return $fallback;
@@ -224,20 +224,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 // Barcode / Code column assignment (Prevents 32-bit INT overflow)
                 foreach ($all_code_cols as $c_col) {
                     if (is32BitIntType($c_col, $tx_col_types)) {
-                        $insert_data[$c_col] = safeInt32($prod_id, safeInt32($barcode, 0));
+                        $insert_data[$c_col] = safeInt32($barcode, null);
                     } else {
                         $insert_data[$c_col] = $barcode;
                     }
                 }
 
-                // Product / Item ID column assignment
+                // Product / Item Foreign Key Assignment (Sets NULL when ID <= 0 to avoid FK violation)
                 foreach ($all_id_cols as $id_col) {
-                    if (is32BitIntType($id_col, $tx_col_types)) {
-                        $insert_data[$id_col] = safeInt32($prod_id, 0);
-                    } elseif (isBigIntType($id_col, $tx_col_types)) {
-                        $insert_data[$id_col] = $prod_id > 0 ? $prod_id : (is_numeric($barcode) ? (int)$barcode : 0);
+                    if ($prod_id > 0) {
+                        $insert_data[$id_col] = $prod_id;
                     } else {
-                        $insert_data[$id_col] = $prod_id > 0 ? $prod_id : $barcode;
+                        $insert_data[$id_col] = null;
                     }
                 }
 
@@ -272,6 +270,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         if ($is_gen === 'ALWAYS') continue;
 
                         if (!array_key_exists($c_name, $insert_data) && strtolower($c_name) !== strtolower($pk_col)) {
+                            // Do not auto-fill foreign key columns with 0
+                            if (in_array(strtolower($c_name), array_map('strtolower', $all_id_cols))) {
+                                continue;
+                            }
                             $dtype = strtolower($nn_row['data_type']);
                             if (strpos($dtype, 'int') !== false || strpos($dtype, 'num') !== false || strpos($dtype, 'dec') !== false || strpos($dtype, 'float') !== false) {
                                 $insert_data[$c_name] = 0;
@@ -380,11 +382,19 @@ try {
         $name = getTxVal($p, $desc_candidates, $desc_keywords, 'Product Item');
         $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
         $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], 0);
-        $p_id = $p['id'] ?? $p['product_id'] ?? $p['item_id'] ?? 0;
+
+        // Flexible Primary Key Resolution for Products
+        $p_id = 0;
+        foreach (['id', 'product_id', 'item_id', 'prod_id', 'p_id'] as $id_key) {
+            if (isset($p[$id_key]) && is_numeric($p[$id_key]) && (int)$p[$id_key] > 0) {
+                $p_id = (int)$p[$id_key];
+                break;
+            }
+        }
 
         if ($code !== null && trim((string)$code) !== '') {
             $products_map[trim((string)$code)] = [
-                'id'        => (int)$p_id,
+                'id'        => $p_id,
                 'name'      => $name,
                 'price'     => (float)$price,
                 'buy_price' => (float)$buy_price
