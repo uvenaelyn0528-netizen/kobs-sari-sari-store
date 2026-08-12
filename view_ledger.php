@@ -293,7 +293,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
 <body>
 
 <div class="back-btn-container">
-    <a href="stockout.php" class="back-btn">&larr; Back to Dashboard</a>
+    <a href="Credit.php" class="back-btn">&larr; Back to Credit List</a>
 </div>
 
 <h1 class="header-title"><?= htmlspecialchars($customer_name) ?></h1>
