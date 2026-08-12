@@ -55,7 +55,7 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Fetch Customer Name reliably from customers table
+// Fetch Customer Name reliably from customers table using customer_id
 $customer_name = '';
 try {
     $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
@@ -66,8 +66,9 @@ try {
     }
 } catch (Exception $e) {}
 
+// Fallback to customer_id if name is not found in customers table
 if (empty($customer_name) || $customer_name === '-') {
-    $customer_name = 'Abug, Milecha'; 
+    $customer_name = 'Customer #' . $customer_id;
 }
 
 // Product map lookup
@@ -92,7 +93,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch transactions matching ID or exact Customer Name
+// Fetch transactions matching ID or Customer Name
 $transactions = [];
 $total_credit = 0;
 $total_payment = 0;
@@ -358,7 +359,6 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
                         <td colspan="6" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction history found for this customer.</td>
                     </tr>
                 <?php else: 
-                    // Calculate running balance chronologically and display latest first
                     $running_balance = 0;
                     $calculated_rows = [];
                     foreach ($transactions as $tx) {
@@ -372,10 +372,8 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
                         }
                         
                         $tx['running_balance'] = $running_balance;
-                        mw:
                         $calculated_rows[] = $tx;
                     }
-                    // Reverse to show newest transactions at the top
                     $calculated_rows = array_reverse($calculated_rows);
                 ?>
                     <?php foreach ($calculated_rows as $tx): 
