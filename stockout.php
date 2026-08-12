@@ -251,17 +251,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     $items_raw = $_POST['items_payload'] ?? '[]';
     $items = json_decode($items_raw, true);
 
-    // Dynamic resolution for customer_id
+    // Dynamic resolution for customer_id and customer_name
     if (!$selected_cust_id && !empty($customer_name)) {
         $c_lower = strtolower($customer_name);
         if (isset($customers_map[$c_lower])) {
             $selected_cust_id = $customers_map[$c_lower];
         }
     }
+    
+    if ($selected_cust_id && empty($customer_name)) {
+        foreach ($customers_data as $cd) {
+            if ($cd['id'] == $selected_cust_id) {
+                $customer_name = $cd['name'];
+                break;
+            }
+        }
+    }
 
-    if ($tx_type === 'Cash') {
-        $selected_cust_id = null;
+    // Only fallback to '-' for Cash if no customer name was provided
+    if ($tx_type === 'Cash' && empty($customer_name)) {
         $customer_name = '-';
+        $selected_cust_id = null;
     }
 
     if (!empty($items) && is_array($items)) {
@@ -756,6 +766,11 @@ try {
             display: inline-block;
         }
 
+        .badge-type.credit {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
+
         .action-del {
             color: #ef4444;
             text-decoration: none;
@@ -815,8 +830,9 @@ try {
                 <input type="hidden" name="items_payload" id="items_payload" value="[]">
                 <input type="hidden" name="customer_id_val" id="customer_id_val" value="">
 
+                <!-- Transaction Type -->
                 <div class="form-group">
-                    <label>Transaction Type</label>
+                    <label for="tx_type">Transaction Type</label>
                     <select name="tx_type" id="tx_type" class="form-control" onchange="toggleCustomerField()">
                         <option value="Cash">Cash</option>
                         <option value="Credit">Credit</option>
@@ -824,119 +840,127 @@ try {
                     </select>
                 </div>
 
-                <div class="form-group" id="customer_group" style="display: none;">
-                    <label>Customer Name</label>
-                    <input type="text" name="customer_name" id="customer_name_input" class="form-control" list="customer_dropdown_list" placeholder="Select or type customer name" autocomplete="off" onchange="onCustomerSelect(this.value)">
-                    <datalist id="customer_dropdown_list">
-                        <?php foreach ($customers_data as $c): ?>
-                            <option value="<?php echo htmlspecialchars($c['name']); ?>" data-id="<?php echo $c['id'] ?? ''; ?>"><?php echo htmlspecialchars($c['name']); ?></option>
+                <!-- Customer Selection Field -->
+                <div class="form-group" id="customerGroup">
+                    <label for="customer_name">Customer Name</label>
+                    <input type="text" name="customer_name" id="customer_name" class="form-control" list="customer_list" placeholder="Select or type customer name..." autocomplete="off" onchange="syncCustomerId()">
+                    <datalist id="customer_list">
+                        <?php foreach ($customers_data as $cust): ?>
+                            <option data-id="<?php echo $cust['id']; ?>" value="<?php echo htmlspecialchars($cust['name']); ?>"></option>
                         <?php endforeach; ?>
                     </datalist>
                 </div>
 
+                <!-- Barcode & Item Scan Section -->
                 <div class="form-group">
                     <label>Product Barcode / Code</label>
                     <div class="scan-row">
-                        <input type="text" id="barcode_input" class="form-control" placeholder="Scan barcode or enter code" autofocus autocomplete="off">
-                        <div>
-                            <input type="number" id="qty_input" class="form-control" value="1" min="1">
-                        </div>
-                        <button type="button" class="add-btn" onclick="addItemFromScan()" title="Add to transaction">+</button>
+                        <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus onkeypress="if(event.key==='Enter'){event.preventDefault(); addToCart();}">
+                        <input type="number" id="scan_qty" class="form-control" value="1" min="1">
+                        <button type="button" class="add-btn" onclick="addToCart()">+</button>
                     </div>
                 </div>
 
+                <!-- Scanned Cart Table -->
                 <div class="cart-box">
                     <table class="cart-table">
                         <thead>
                             <tr>
                                 <th>Item / Code</th>
-                                <th style="width: 40px;">Qty</th>
-                                <th style="width: 65px;">Price</th>
-                                <th style="width: 75px;">Subtotal</th>
-                                <th style="width: 25px;"></th>
+                                <th>Qty</th>
+                                <th>Price</th>
+                                <th>Subtotal</th>
+                                <th></th>
                             </tr>
                         </thead>
-                        <tbody id="cart_body">
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td>
+                        <tbody id="cartTableBody">
+                            <tr id="emptyCartRow">
+                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
 
+                <!-- Cart Total -->
                 <div class="cart-summary">
                     <span class="label">Total Amount:</span>
-                    <span class="total-value" id="grand_total_display">₱0.00</span>
+                    <span class="total-value" id="cartTotalDisplay">₱0.00</span>
                 </div>
 
+                <!-- Date -->
                 <div class="form-group">
-                    <label>Date</label>
-                    <input type="date" name="tx_date" class="form-control" value="<?php echo $today; ?>">
+                    <label for="tx_date">Date</label>
+                    <input type="date" name="tx_date" id="tx_date" class="form-control" value="<?php echo $today; ?>">
                 </div>
 
-                <button type="submit" class="process-btn" onclick="return validateBeforeSubmit()">Process Transaction</button>
+                <button type="submit" class="process-btn">Process Transaction</button>
             </form>
         </div>
 
-        <!-- HISTORY LOG -->
+        <!-- TRANSACTION HISTORY LOG -->
         <div class="panel-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h2 class="panel-title" style="margin: 0;">Transaction History Log</h2>
-                <input type="text" placeholder="Search transactions..." class="form-control" style="width: 220px;" onkeyup="filterHistory(this.value)">
-            </div>
+            <h2 class="panel-title">Transaction History Log</h2>
 
-            <table class="history-table" id="history_table">
+            <table class="history-table">
                 <thead>
                     <tr>
-                        <th>CODE</th>
-                        <th>DATE</th>
-                        <th>QTY</th>
-                        <th>TYPE</th>
-                        <th>CUSTOMER NAME</th>
-                        <th>DESCRIPTION</th>
-                        <th>AMOUNT</th>
-                        <th>ACTIONS</th>
+                        <th>Code</th>
+                        <th>Date</th>
+                        <th>Qty</th>
+                        <th>Type</th>
+                        <th>Customer Name</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if (!empty($transactions)): ?>
                         <?php foreach ($transactions as $tx): ?>
-                            <?php 
-                                $t_code = getTxVal($tx, $code_candidates, $code_keywords);
-                                $t_id   = getTxVal($tx, $id_candidates, $id_keywords, null);
-                                $t_date = getTxVal($tx, $date_candidates, $date_keywords);
-                                $t_qty  = getTxVal($tx, $qty_candidates, $qty_keywords);
-                                $t_type = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
-                                $t_cust = getTxVal($tx, $cust_candidates, $cust_keywords);
-                                $t_desc = getTxVal($tx, $desc_candidates, $desc_keywords);
-                                $t_amt  = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
-                                $row_id = $tx[$pk_col] ?? reset($tx);
+                            <?php
+                                $code_val = getTxVal($tx, $code_candidates, $code_keywords, '-');
+                                $date_val = getTxVal($tx, $date_candidates, $date_keywords, '-');
+                                $qty_val  = getTxVal($tx, $qty_candidates, $qty_keywords, '1');
+                                $type_val = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
+                                $desc_val = getTxVal($tx, $desc_candidates, $desc_keywords, 'Item');
+                                $amt_val  = (float)getTxVal($tx, $amt_candidates, $amt_keywords, 0);
 
-                                if (($t_code === '-' || empty($t_code)) && $t_id && isset($products_by_id[$t_id])) {
-                                    $t_code = $products_by_id[$t_id]['code'];
+                                // DYNAMIC CUSTOMER NAME RESOLUTION FOR HISTORY TABLE
+                                $cust_val = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
+                                if ($cust_val === '-' || empty($cust_val)) {
+                                    $c_id = getTxVal($tx, ['customer_id', 'cust_id'], [], null);
+                                    if ($c_id && is_numeric($c_id)) {
+                                        foreach ($customers_data as $cd) {
+                                            if ($cd['id'] == $c_id) {
+                                                $cust_val = $cd['name'];
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
-                                if (($t_desc === '-' || is_numeric($t_desc)) && $t_code !== '-' && isset($products_map[$t_code])) {
-                                    $t_desc = $products_map[$t_code]['name'];
-                                } elseif (($t_desc === '-' || is_numeric($t_desc)) && $t_id && isset($products_by_id[$t_id])) {
-                                    $t_desc = $products_by_id[$t_id]['name'];
-                                }
+
+                                $pk_val = $tx[$pk_col] ?? 0;
                             ?>
                             <tr>
-                                <td><strong><?php echo htmlspecialchars((string)$t_code); ?></strong></td>
-                                <td><?php echo htmlspecialchars((string)$t_date); ?></td>
-                                <td><?php echo htmlspecialchars((string)$t_qty); ?></td>
-                                <td><span class="badge-type"><?php echo htmlspecialchars((string)$t_type); ?></span></td>
-                                <td><em><?php echo htmlspecialchars((string)$t_cust); ?></em></td>
-                                <td><?php echo htmlspecialchars((string)$t_desc); ?></td>
-                                <td><strong>₱<?php echo number_format((float)$t_amt, 2); ?></strong></td>
+                                <td><strong><?php echo htmlspecialchars($code_val); ?></strong></td>
+                                <td><?php echo htmlspecialchars($date_val); ?></td>
+                                <td><?php echo htmlspecialchars($qty_val); ?></td>
                                 <td>
-                                    <a href="stockout.php?delete_id=<?php echo urlencode($row_id); ?>" class="action-del" onclick="return confirm('Delete this record?')">Delete</a>
+                                    <span class="badge-type <?php echo (strtolower($type_val) === 'credit') ? 'credit' : ''; ?>">
+                                        <?php echo htmlspecialchars($type_val); ?>
+                                    </span>
+                                </td>
+                                <td><strong><?php echo htmlspecialchars($cust_val); ?></strong></td>
+                                <td><?php echo htmlspecialchars($desc_val); ?></td>
+                                <td><strong>₱<?php echo number_format($amt_val, 2); ?></strong></td>
+                                <td>
+                                    <a href="stockout.php?delete_id=<?php echo urlencode($pk_val); ?>" class="action-del" onclick="return confirm('Delete transaction record?')">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transactions recorded today.</td>
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction records found.</td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
@@ -946,139 +970,129 @@ try {
     </div>
 
     <script>
-        const productDatabase = <?php echo json_encode($products_map); ?>;
-        const customersMap = <?php echo json_encode($customers_map); ?>;
-        let cartItems = [];
+        const productsMap = <?php echo json_encode($products_map); ?>;
+        const customersData = <?php echo json_encode($customers_data); ?>;
+        let cart = [];
 
-        const barcodeInput = document.getElementById('barcode_input');
-        const qtyInput = document.getElementById('qty_input');
-        const cartBody = document.getElementById('cart_body');
-        const grandTotalDisplay = document.getElementById('grand_total_display');
-        const itemsPayload = document.getElementById('items_payload');
-        const customerIdVal = document.getElementById('customer_id_val');
-
-        barcodeInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                addItemFromScan();
-            }
-        });
-
-        function onCustomerSelect(val) {
-            const cleanVal = val.trim().toLowerCase();
-            if (customersMap[cleanVal]) {
-                customerIdVal.value = customersMap[cleanVal];
+        function toggleCustomerField() {
+            const txType = document.getElementById('tx_type').value;
+            const custInput = document.getElementById('customer_name');
+            if (txType === 'Cash') {
+                custInput.placeholder = "Optional for Cash sales";
             } else {
-                customerIdVal.value = '';
+                custInput.placeholder = "Select or type customer name...";
             }
         }
 
-        function addItemFromScan() {
-            const code = barcodeInput.value.trim();
+        function syncCustomerId() {
+            const val = document.getElementById('customer_name').value.trim().toLowerCase();
+            const hiddenId = document.getElementById('customer_id_val');
+            hiddenId.value = '';
+
+            const option = document.querySelector(`#customer_list option[value="${document.getElementById('customer_name').value}"]`);
+            if (option && option.dataset.id) {
+                hiddenId.value = option.dataset.id;
+            } else {
+                const match = customersData.find(c => c.name.toLowerCase() === val);
+                if (match && match.id) {
+                    hiddenId.value = match.id;
+                }
+            }
+        }
+
+        function addToCart() {
+            const codeInput = document.getElementById('scan_code');
+            const qtyInput = document.getElementById('scan_qty');
+            
+            const code = codeInput.value.trim();
             const qty = parseInt(qtyInput.value) || 1;
 
             if (!code) return;
 
-            let id = 0;
-            let name = "Scanned Item (" + code + ")";
-            let price = 0.00;
-            let buyPrice = 0.00;
-
-            if (productDatabase[code]) {
-                id = productDatabase[code].id || 0;
-                name = productDatabase[code].name;
-                price = parseFloat(productDatabase[code].price) || 0.00;
-                buyPrice = parseFloat(productDatabase[code].buy_price) || 0.00;
-            } else {
-                const manualPrice = prompt(`Item code "${code}" not found in database.\nEnter selling price per unit:`, "0");
-                if (manualPrice === null) return;
-                price = parseFloat(manualPrice) || 0;
+            let prod = productsMap[code];
+            if (!prod) {
+                prod = {
+                    id: 0,
+                    code: code,
+                    name: "Item " + code,
+                    price: 0.00,
+                    buy_price: 0.00
+                };
             }
 
-            const existingIndex = cartItems.findIndex(item => item.code === code);
+            const existingIndex = cart.findIndex(i => i.code === code);
             if (existingIndex > -1) {
-                cartItems[existingIndex].qty += qty;
+                cart[existingIndex].qty += qty;
             } else {
-                cartItems.push({
-                    id: id,
-                    code: code,
-                    name: name,
-                    price: price,
-                    buy_price: buyPrice,
+                cart.push({
+                    id: prod.id,
+                    code: prod.code,
+                    name: prod.name,
+                    price: prod.price,
+                    buy_price: prod.buy_price,
                     qty: qty
                 });
             }
 
-            renderCart();
-
-            barcodeInput.value = '';
+            codeInput.value = '';
             qtyInput.value = '1';
-            barcodeInput.focus();
+            codeInput.focus();
+            renderCart();
         }
 
-        function removeCartItem(index) {
-            cartItems.splice(index, 1);
+        function removeFromCart(index) {
+            cart.splice(index, 1);
             renderCart();
         }
 
         function renderCart() {
-            if (cartItems.length === 0) {
-                cartBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">No items scanned yet.</td></tr>`;
-                grandTotalDisplay.innerText = "₱0.00";
-                itemsPayload.value = "[]";
+            const tbody = document.getElementById('cartTableBody');
+            const payloadInput = document.getElementById('items_payload');
+            const totalDisplay = document.getElementById('cartTotalDisplay');
+
+            tbody.innerHTML = '';
+            let grandTotal = 0;
+
+            if (cart.length === 0) {
+                tbody.innerHTML = '<tr id="emptyCartRow"><td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td></tr>';
+                totalDisplay.textContent = '₱0.00';
+                payloadInput.value = '[]';
                 return;
             }
 
-            let html = '';
-            let grandTotal = 0;
-
-            cartItems.forEach((item, index) => {
+            cart.forEach((item, index) => {
                 const subtotal = item.qty * item.price;
                 grandTotal += subtotal;
 
-                html += `
-                    <tr>
-                        <td>
-                            <strong>${item.code}</strong><br>
-                            <small style="color: #64748b;">${item.name}</small>
-                        </td>
-                        <td>${item.qty}</td>
-                        <td>₱${item.price.toFixed(2)}</td>
-                        <td><strong>₱${subtotal.toFixed(2)}</strong></td>
-                        <td>
-                            <button type="button" class="cart-delete-btn" onclick="removeCartItem(${index})">✕</button>
-                        </td>
-                    </tr>
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${item.name}</strong><br><small style="color: #64748b;">${item.code}</small></td>
+                    <td>${item.qty}</td>
+                    <td>₱${item.price.toFixed(2)}</td>
+                    <td><strong>₱${subtotal.toFixed(2)}</strong></td>
+                    <td><button type="button" class="cart-delete-btn" onclick="removeFromCart(${index})">&times;</button></td>
                 `;
+                tbody.appendChild(tr);
             });
 
-            cartBody.innerHTML = html;
-            grandTotalDisplay.innerText = "₱" + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            itemsPayload.value = JSON.stringify(cartItems);
+            totalDisplay.textContent = `₱${grandTotal.toFixed(2)}`;
+            payloadInput.value = JSON.stringify(cart);
         }
 
-        function toggleCustomerField() {
-            const txType = document.getElementById('tx_type').value;
-            const customerGroup = document.getElementById('customer_group');
-            customerGroup.style.display = (txType === 'Credit' || txType === 'Payment') ? 'block' : 'none';
-        }
-
-        function validateBeforeSubmit() {
-            if (cartItems.length === 0) {
-                alert("Please scan at least one item before processing the transaction.");
-                return false;
+        document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            if (cart.length === 0) {
+                e.preventDefault();
+                alert('Please scan or add at least one product to the cart before processing.');
+                return;
             }
-            return true;
-        }
-
-        function filterHistory(query) {
-            const filter = query.toLowerCase();
-            const rows = document.querySelectorAll("#history_table tbody tr");
-            rows.forEach(row => {
-                const text = row.innerText.toLowerCase();
-                row.style.display = text.includes(filter) ? "" : "none";
-            });
-        }
+            const txType = document.getElementById('tx_type').value;
+            const custName = document.getElementById('customer_name').value.trim();
+            if ((txType === 'Credit' || txType === 'Payment') && !custName) {
+                e.preventDefault();
+                alert('Please enter or select a Customer Name for Credit/Payment transactions.');
+                document.getElementById('customer_name').focus();
+            }
+        });
     </script>
 </body>
 </html>
