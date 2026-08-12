@@ -55,14 +55,14 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Fetch Customer Name reliably from customers table using multiple possible column names
+// Fetch Customer Name reliably matching Supabase 'customer_name' column
 $customer_name = '';
 try {
     $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
     $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
-        $possible_name_columns = ['name', 'customer_name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer', 'store_name'];
+        $possible_name_columns = ['customer_name', 'name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer', 'store_name'];
         foreach ($possible_name_columns as $col) {
             if (isset($c_data[$col]) && trim((string)$c_data[$col]) !== '' && trim((string)$c_data[$col]) !== '-') {
                 $customer_name = trim($c_data[$col]);
