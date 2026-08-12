@@ -55,18 +55,36 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Fetch Customer Name reliably from customers table using customer_id
+// Fetch Customer Name reliably from customers table using multiple possible column names
 $customer_name = '';
 try {
     $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
     $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
-        $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer'], ['name', 'cust'], '');
+        $possible_name_columns = ['name', 'customer_name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer', 'store_name'];
+        foreach ($possible_name_columns as $col) {
+            if (isset($c_data[$col]) && trim((string)$c_data[$col]) !== '' && trim((string)$c_data[$col]) !== '-') {
+                $customer_name = trim($c_data[$col]);
+                break;
+            }
+        }
     }
 } catch (Exception $e) {}
 
-// Fallback to customer_id if name is not found in customers table
+// Kung wala sa customers table, tingnan sa transactions table
+if (empty($customer_name)) {
+    try {
+        $t_name_stmt = $pdo->prepare("SELECT customer_name FROM transactions WHERE customer_id = ? OR id = ? LIMIT 1");
+        $t_name_stmt->execute([$customer_id, $customer_id]);
+        $t_row = $t_name_stmt->fetch(PDO::FETCH_ASSOC);
+        if ($t_row && !empty($t_row['customer_name'])) {
+            $customer_name = trim($t_row['customer_name']);
+        }
+    } catch (Exception $e) {}
+}
+
+// Huling fallback kung talagang blangko
 if (empty($customer_name) || $customer_name === '-') {
     $customer_name = 'Customer #' . $customer_id;
 }
@@ -93,7 +111,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch transactions matching ID or Customer Name
+// Fetch transactions matching ID or exact Customer Name
 $transactions = [];
 $total_credit = 0;
 $total_payment = 0;
