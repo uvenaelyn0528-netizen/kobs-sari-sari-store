@@ -1,29 +1,30 @@
 <?php
 require_once 'db.php'; 
 
-// Dynamically resolve table column name ('type' vs 'transaction_type') to prevent SQLSTATE[42703]
+// Auto-detect transaction type column name from PostgreSQL table metadata
 $typeCol = 'type';
 try {
-    $colCheck = $pdo->query("
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name = 'transactions' 
-          AND column_name IN ('type', 'transaction_type')
-        LIMIT 1
-    ")->fetchColumn();
-    
-    if ($colCheck) {
-        $typeCol = $colCheck;
+    $metaStmt = $pdo->query("SELECT * FROM transactions LIMIT 0");
+    for ($i = 0; $i < $metaStmt->columnCount(); $i++) {
+        $meta = $metaStmt->getColumnMeta($i);
+        $colName = strtolower($meta['name']);
+        if (in_array($colName, ['transaction_type', 'type', 'trans_type', 'transtype'])) {
+            $typeCol = $meta['name'];
+            break;
+        }
     }
 } catch (Exception $e) {
-    $typeCol = 'type';
+    $typeCol = 'transaction_type';
 }
 
-// Fetch total summary metrics
+// Safely format column identifier for PostgreSQL
+$typeColSql = '"' . str_replace('"', '""', $typeCol) . '"';
+
+// Fetch summary card totals
 $summaryQuery = "
     SELECT 
-        COALESCE(SUM(CASE WHEN \"{$typeCol}\" = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
-        COALESCE(SUM(CASE WHEN \"{$typeCol}\" = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
+        COALESCE(SUM(CASE WHEN {$typeColSql} = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
+        COALESCE(SUM(CASE WHEN {$typeColSql} = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
     FROM transactions
 ";
 $summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
@@ -32,15 +33,15 @@ $totalStoreCredit = $summary['total_store_credit'] ?? 0;
 $totalPayment = $summary['total_payment'] ?? 0;
 $totalBalance = $totalStoreCredit - $totalPayment;
 
-// Fetch customer credit ledger entries
+// Fetch customer ledger balances grouped by customer_id
 $ledgerQuery = "
     SELECT 
         c.id AS customer_id,
         c.name AS customer_name,
-        COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
-        COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
-        (COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Credit' THEN t.amount ELSE 0 END), 0) - 
-         COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
+        COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
+        COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
+        (COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) - 
+         COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
     FROM customers c
     LEFT JOIN transactions t ON c.id = t.customer_id
     GROUP BY c.id, c.name
@@ -67,7 +68,7 @@ $ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
 
         <h1 class="text-2xl font-bold text-slate-800">KOBS Sari-Sari Store Credit list</h1>
 
-        <!-- Summary Metric Cards -->
+        <!-- Metric Summary Cards -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="bg-white p-5 rounded-xl shadow-sm border-t-4 border-blue-500">
                 <span class="text-xs font-bold text-gray-400 tracking-wider uppercase">Total Store Credit</span>
@@ -83,7 +84,7 @@ $ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
             </div>
         </div>
 
-        <!-- Ledger Table -->
+        <!-- Customer Credit Ledger Table -->
         <div class="bg-white rounded-xl shadow-sm p-6 space-y-4">
             <div class="flex justify-between items-center">
                 <h2 class="text-lg font-bold text-slate-800">Customer Credit Ledger</h2>
