@@ -293,8 +293,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     $customer_name = trim($_POST['customer_name'] ?? '');
     $selected_cust_id = !empty($_POST['customer_id_val']) ? (int)$_POST['customer_id_val'] : null;
     $tx_date = $_POST['tx_date'] ?? $today;
-    $items_raw = $_POST['items_payload'] ?? '[]';
-    $items = json_decode($items_raw, true);
+
+    if ($tx_type === 'Payment') {
+        $pay_amt = (float)($_POST['payment_amount'] ?? 0);
+        $items = [[
+            'id'        => null,
+            'code'      => 'PAYMENT',
+            'name'      => 'Account Payment',
+            'qty'       => 1,
+            'price'     => $pay_amt,
+            'buy_price' => 0
+        ]];
+    } else {
+        $items_raw = $_POST['items_payload'] ?? '[]';
+        $items = json_decode($items_raw, true);
+    }
 
     // Dynamic resolution & auto-creation for customer_id and customer_name
     if (!empty($customer_name) && $customer_name !== '-') {
@@ -332,7 +345,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         }
     }
 
-    if ($tx_type === 'Cash' && empty($customer_name)) {
+    if ($tx_type === 'Cash') {
         $customer_name = '-';
         $selected_cust_id = null;
     }
@@ -473,7 +486,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct stock from products
+                // Deduct stock from products (Only for Cash and Credit)
                 if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -800,6 +813,11 @@ try {
             color: #dc2626;
         }
 
+        .badge-type.payment {
+            background-color: #e0f2fe;
+            color: #0369a1;
+        }
+
         .action-del {
             color: #ef4444;
             text-decoration: none;
@@ -862,15 +880,15 @@ try {
                 <!-- Transaction Type -->
                 <div class="form-group">
                     <label for="tx_type">Transaction Type</label>
-                    <select name="tx_type" id="tx_type" class="form-control" onchange="toggleCustomerField()">
+                    <select name="tx_type" id="tx_type" class="form-control" onchange="updateTxTypeUI()">
                         <option value="Cash">Cash</option>
                         <option value="Credit">Credit</option>
                         <option value="Payment">Payment</option>
                     </select>
                 </div>
 
-                <!-- Customer Selection Field -->
-                <div class="form-group" id="customerGroup">
+                <!-- Customer Selection Field (Hidden for Cash) -->
+                <div class="form-group" id="customerGroup" style="display: none;">
                     <label for="customer_name">Customer Name</label>
                     <input type="text" name="customer_name" id="customer_name" class="form-control" list="customer_list" placeholder="Select or type customer name..." autocomplete="off" onchange="syncCustomerId()" oninput="syncCustomerId()">
                     <datalist id="customer_list">
@@ -880,40 +898,48 @@ try {
                     </datalist>
                 </div>
 
-                <!-- Barcode & Item Scan Section -->
-                <div class="form-group">
-                    <label>Product Barcode / Code</label>
-                    <div class="scan-row">
-                        <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus onkeypress="if(event.key==='Enter'){event.preventDefault(); addToCart();}">
-                        <input type="number" id="scan_qty" class="form-control" value="1" min="1">
-                        <button type="button" class="add-btn" onclick="addToCart()">+</button>
+                <!-- Direct Payment Amount Field (Shown only for Payment) -->
+                <div class="form-group" id="paymentAmountGroup" style="display: none;">
+                    <label for="payment_amount">Payment Amount (₱)</label>
+                    <input type="number" step="0.01" min="0.01" name="payment_amount" id="payment_amount" class="form-control" placeholder="0.00">
+                </div>
+
+                <!-- Barcode & Item Scan Section (Shown for Cash & Credit) -->
+                <div id="productScanSection">
+                    <div class="form-group">
+                        <label>Product Barcode / Code</label>
+                        <div class="scan-row">
+                            <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus onkeypress="if(event.key==='Enter'){event.preventDefault(); addToCart();}">
+                            <input type="number" id="scan_qty" class="form-control" value="1" min="1">
+                            <button type="button" class="add-btn" onclick="addToCart()">+</button>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Scanned Cart Table -->
-                <div class="cart-box">
-                    <table class="cart-table">
-                        <thead>
-                            <tr>
-                                <th>Item / Code</th>
-                                <th>Qty</th>
-                                <th>Price</th>
-                                <th>Subtotal</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="cartTableBody">
-                            <tr id="emptyCartRow">
-                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+                    <!-- Scanned Cart Table -->
+                    <div class="cart-box">
+                        <table class="cart-table">
+                            <thead>
+                                <tr>
+                                    <th>Item / Code</th>
+                                    <th>Qty</th>
+                                    <th>Price</th>
+                                    <th>Subtotal</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="cartTableBody">
+                                <tr id="emptyCartRow">
+                                    <td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
 
-                <!-- Cart Total -->
-                <div class="cart-summary">
-                    <span class="label">Total Amount:</span>
-                    <span class="total-value" id="cartTotalDisplay">₱0.00</span>
+                    <!-- Cart Total -->
+                    <div class="cart-summary">
+                        <span class="label">Total Amount:</span>
+                        <span class="total-value" id="cartTotalDisplay">₱0.00</span>
+                    </div>
                 </div>
 
                 <!-- Date -->
@@ -1016,13 +1042,14 @@ try {
                                 }
 
                                 $pk_val = $tx[$pk_col] ?? 0;
+                                $type_lower = strtolower($type_val);
                             ?>
                             <tr>
                                 <td><strong><?php echo htmlspecialchars($code_val); ?></strong></td>
                                 <td><?php echo htmlspecialchars($date_val); ?></td>
                                 <td><?php echo htmlspecialchars($qty_val); ?></td>
                                 <td>
-                                    <span class="badge-type <?php echo (strtolower($type_val) === 'credit') ? 'credit' : ''; ?>">
+                                    <span class="badge-type <?php echo ($type_lower === 'credit') ? 'credit' : (($type_lower === 'payment') ? 'payment' : ''); ?>">
                                         <?php echo htmlspecialchars($type_val); ?>
                                     </span>
                                 </td>
@@ -1050,13 +1077,29 @@ try {
         const customersData = <?php echo json_encode($customers_data); ?>;
         let cart = [];
 
-        function toggleCustomerField() {
+        function updateTxTypeUI() {
             const txType = document.getElementById('tx_type').value;
-            const custInput = document.getElementById('customer_name');
+            const customerGroup = document.getElementById('customerGroup');
+            const productScanSection = document.getElementById('productScanSection');
+            const paymentAmountGroup = document.getElementById('paymentAmountGroup');
+            const customerInput = document.getElementById('customer_name');
+
             if (txType === 'Cash') {
-                custInput.placeholder = "Optional for Cash sales";
-            } else {
-                custInput.placeholder = "Select or type customer name...";
+                customerGroup.style.display = 'none';
+                productScanSection.style.display = 'block';
+                paymentAmountGroup.style.display = 'none';
+                customerInput.value = '';
+                document.getElementById('customer_id_val').value = '';
+            } else if (txType === 'Credit') {
+                customerGroup.style.display = 'block';
+                productScanSection.style.display = 'block';
+                paymentAmountGroup.style.display = 'none';
+                customerInput.placeholder = "Select or type customer name...";
+            } else if (txType === 'Payment') {
+                customerGroup.style.display = 'block';
+                productScanSection.style.display = 'none';
+                paymentAmountGroup.style.display = 'block';
+                customerInput.placeholder = "Select or type customer name...";
             }
         }
 
@@ -1156,20 +1199,47 @@ try {
             payloadInput.value = JSON.stringify(cart);
         }
 
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTxTypeUI();
+        });
+
         document.getElementById('transactionForm').addEventListener('submit', function(e) {
             syncCustomerId();
-
-            if (cart.length === 0) {
-                e.preventDefault();
-                alert('Please scan or add at least one product to the cart before processing.');
-                return;
-            }
             const txType = document.getElementById('tx_type').value;
             const custName = document.getElementById('customer_name').value.trim();
-            if ((txType === 'Credit' || txType === 'Payment') && !custName) {
-                e.preventDefault();
-                alert('Please enter or select a Customer Name for Credit/Payment transactions.');
-                document.getElementById('customer_name').focus();
+
+            if (txType === 'Cash') {
+                if (cart.length === 0) {
+                    e.preventDefault();
+                    alert('Please scan or add at least one product to the cart before processing.');
+                    return;
+                }
+            } else if (txType === 'Credit') {
+                if (!custName) {
+                    e.preventDefault();
+                    alert('Please enter or select a Customer Name for Credit transactions.');
+                    document.getElementById('customer_name').focus();
+                    return;
+                }
+                if (cart.length === 0) {
+                    e.preventDefault();
+                    alert('Please scan or add at least one product to the cart before processing.');
+                    return;
+                }
+            } else if (txType === 'Payment') {
+                if (!custName) {
+                    e.preventDefault();
+                    alert('Please enter or select a Customer Name for Payment transactions.');
+                    document.getElementById('customer_name').focus();
+                    return;
+                }
+                const payAmt = parseFloat(document.getElementById('payment_amount').value);
+                if (isNaN(payAmt) || payAmt <= 0) {
+                    e.preventDefault();
+                    alert('Please enter a valid Payment Amount greater than 0.');
+                    document.getElementById('payment_amount').focus();
+                    return;
+                }
             }
         });
     </script>
