@@ -28,27 +28,79 @@ try {
         $customerName = $custData['name'];
     }
 } catch (Exception $e) {
-    // Fallback name
+    // Fallback customer name
 }
 
-// 2. Detect Description column dynamically from transactions table
-$itemExpr = 't."description"';
+// 2. Safe Dynamic Item / Description Detection
+$itemSelectExpr = "'' AS item_description";
+$joinSql = "";
+
 try {
-    $sampleTx = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-    if ($sampleTx !== false) {
-        $txCols = array_map('strtolower', array_keys($sampleTx));
-        if (in_array('description', $txCols)) {
-            $itemExpr = 't."description"';
-        } elseif (in_array('item_description', $txCols)) {
-            $itemExpr = 't."item_description"';
-        } elseif (in_array('item_name', $txCols)) {
-            $itemExpr = 't."item_name"';
-        } elseif (in_array('product_name', $txCols)) {
-            $itemExpr = 't."product_name"';
+    $txSample = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    
+    if ($txSample !== false && !empty($txSample)) {
+        $txCols = array_map('strtolower', array_keys($txSample));
+        
+        // Search for direct description columns in transactions
+        $directCol = null;
+        $possibleCols = ['item_name', 'description', 'product_name', 'item_description', 'particulars', 'item', 'details', 'name'];
+        foreach ($possibleCols as $col) {
+            if (in_array($col, $txCols)) {
+                $directCol = $col;
+                break;
+            }
+        }
+        
+        if ($directCol !== null) {
+            $itemSelectExpr = 't."' . $directCol . '" AS item_description';
+        } else {
+            // Check for barcode/code column to join with items/products table
+            $codeCol = null;
+            foreach (['barcode', 'code', 'item_code', 'product_code', 'product_id'] as $c) {
+                if (in_array($c, $txCols)) {
+                    $codeCol = $c;
+                    break;
+                }
+            }
+            
+            if ($codeCol !== null) {
+                // Try joining 'items' or 'products' table
+                $joinedTable = null;
+                $itemTableCol = null;
+                
+                try {
+                    $itemSample = $pdo->query("SELECT * FROM items LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                    if ($itemSample !== false) {
+                        $joinedTable = 'items';
+                        $iCols = array_map('strtolower', array_keys($itemSample));
+                        foreach (['item_name', 'description', 'name', 'product_name'] as $ic) {
+                            if (in_array($ic, $iCols)) { $itemTableCol = $ic; break; }
+                        }
+                    }
+                } catch (Exception $e1) {
+                    try {
+                        $prodSample = $pdo->query("SELECT * FROM products LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                        if ($prodSample !== false) {
+                            $joinedTable = 'products';
+                            $pCols = array_map('strtolower', array_keys($prodSample));
+                            foreach (['item_name', 'description', 'name', 'product_name'] as $pc) {
+                                if (in_array($pc, $pCols)) { $itemTableCol = $pc; break; }
+                            }
+                        }
+                    } catch (Exception $e2) {}
+                }
+                
+                if ($joinedTable && $itemTableCol) {
+                    $joinSql = " LEFT JOIN {$joinedTable} i ON t.{$codeCol}::text = i.barcode::text ";
+                    $itemSelectExpr = "COALESCE(i.{$itemTableCol}, t.{$codeCol}::text, '') AS item_description";
+                } else {
+                    $itemSelectExpr = "t.{$codeCol}::text AS item_description";
+                }
+            }
         }
     }
 } catch (Exception $e) {
-    $itemExpr = 't."description"';
+    $itemSelectExpr = "'' AS item_description";
 }
 
 // 3. Fetch Customer Transactions
@@ -65,8 +117,9 @@ try {
             t.total_amount,
             t.qty,
             t.created_at,
-            {$itemExpr} AS item_description
+            {$itemSelectExpr}
         FROM transactions t
+        {$joinSql}
         WHERE t.customer_id = ?
         ORDER BY t.created_at DESC, t.id DESC
     ");
