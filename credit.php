@@ -1,40 +1,75 @@
 <?php
 require_once 'db.php'; 
 
-// Fetch summary metrics using 'payment_type' and 'total_amount'
-$summaryQuery = "
-    SELECT 
-        COALESCE(SUM(CASE WHEN payment_type = 'Credit' THEN total_amount ELSE 0 END), 0) AS total_store_credit,
-        COALESCE(SUM(CASE WHEN payment_type = 'Payment' THEN total_amount ELSE 0 END), 0) AS total_payment
-    FROM transactions
-";
+// 1. Fetch summary metrics from 'transactions' using payment_type and total_amount
+$totalStoreCredit = 0;
+$totalPayment = 0;
+$totalBalance = 0;
 
 try {
+    $summaryQuery = "
+        SELECT 
+            COALESCE(SUM(CASE WHEN payment_type = 'Credit' THEN total_amount ELSE 0 END), 0) AS total_store_credit,
+            COALESCE(SUM(CASE WHEN payment_type = 'Payment' THEN total_amount ELSE 0 END), 0) AS total_payment
+        FROM transactions
+    ";
     $summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
+    $totalStoreCredit = $summary['total_store_credit'] ?? 0;
+    $totalPayment = $summary['total_payment'] ?? 0;
+    $totalBalance = $totalStoreCredit - $totalPayment;
 } catch (Exception $e) {
-    die("Database Query Error: " . htmlspecialchars($e->getMessage()));
+    die("Database Summary Error: " . htmlspecialchars($e->getMessage()));
 }
 
-$totalStoreCredit = $summary['total_store_credit'] ?? 0;
-$totalPayment = $summary['total_payment'] ?? 0;
-$totalBalance = $totalStoreCredit - $totalPayment;
-
-// Fetch customer ledger balances grouped by customer_id
-$ledgerQuery = "
-    SELECT 
-        c.id AS customer_id,
-        c.name AS customer_name,
-        COALESCE(SUM(CASE WHEN t.payment_type = 'Credit' THEN t.total_amount ELSE 0 END), 0) AS store_credit,
-        COALESCE(SUM(CASE WHEN t.payment_type = 'Payment' THEN t.total_amount ELSE 0 END), 0) AS total_payment,
-        (COALESCE(SUM(CASE WHEN t.payment_type = 'Credit' THEN t.total_amount ELSE 0 END), 0) - 
-         COALESCE(SUM(CASE WHEN t.payment_type = 'Payment' THEN t.total_amount ELSE 0 END), 0)) AS total_balance
-    FROM customers c
-    LEFT JOIN transactions t ON c.id = t.customer_id
-    GROUP BY c.id, c.name
-    ORDER BY c.name ASC
-";
-
+// 2. Dynamically determine customer name column in 'customers' table
+$custNameExpr = "c.id::text";
 try {
+    $sampleCust = $pdo->query("SELECT * FROM customers LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if ($sampleCust !== false) {
+        $custCols = array_keys($sampleCust);
+        $lowerCols = array_map('strtolower', $custCols);
+
+        if (in_array('customer_name', $lowerCols)) {
+            $custNameExpr = 'c."customer_name"';
+        } elseif (in_array('name', $lowerCols)) {
+            $custNameExpr = 'c."name"';
+        } elseif (in_array('fullname', $lowerCols)) {
+            $custNameExpr = 'c."fullname"';
+        } elseif (in_array('full_name', $lowerCols)) {
+            $custNameExpr = 'c."full_name"';
+        } elseif (in_array('first_name', $lowerCols) && in_array('last_name', $lowerCols)) {
+            $custNameExpr = "CONCAT(c.first_name, ' ', c.last_name)";
+        } elseif (in_array('first_name', $lowerCols)) {
+            $custNameExpr = 'c."first_name"';
+        } else {
+            foreach ($custCols as $col) {
+                if (!in_array(strtolower($col), ['id', 'created_at', 'updated_at', 'phone', 'address', 'email', 'contact'])) {
+                    $custNameExpr = 'c."' . str_replace('"', '""', $col) . '"';
+                    break;
+                }
+            }
+        }
+    }
+} catch (Exception $e) {
+    $custNameExpr = 'c.customer_name';
+}
+
+// 3. Fetch customer ledger balances grouped by customer
+$ledgerRows = [];
+try {
+    $ledgerQuery = "
+        SELECT 
+            c.id AS customer_id,
+            {$custNameExpr} AS customer_name,
+            COALESCE(SUM(CASE WHEN t.payment_type = 'Credit' THEN t.total_amount ELSE 0 END), 0) AS store_credit,
+            COALESCE(SUM(CASE WHEN t.payment_type = 'Payment' THEN t.total_amount ELSE 0 END), 0) AS total_payment,
+            (COALESCE(SUM(CASE WHEN t.payment_type = 'Credit' THEN t.total_amount ELSE 0 END), 0) - 
+             COALESCE(SUM(CASE WHEN t.payment_type = 'Payment' THEN t.total_amount ELSE 0 END), 0)) AS total_balance
+        FROM customers c
+        LEFT JOIN transactions t ON c.id = t.customer_id
+        GROUP BY c.id, {$custNameExpr}
+        ORDER BY customer_name ASC
+    ";
     $ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     die("Ledger Query Error: " . htmlspecialchars($e->getMessage()));
