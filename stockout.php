@@ -141,6 +141,18 @@ try {
     }
 } catch (Exception $e) {}
 
+// Detect 'customers' table columns dynamically
+$cust_id_col = 'id';
+$cust_name_col = 'name';
+try {
+    $c_cols_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE lower(table_name) = 'customers' AND table_schema = 'public'");
+    $c_cols = $c_cols_stmt->fetchAll(PDO::FETCH_COLUMN);
+    if (!empty($c_cols)) {
+        $cust_id_col = findSingleColumn(['id', 'customer_id', 'cust_id'], ['id'], $c_cols) ?? $c_cols[0];
+        $cust_name_col = findSingleColumn(['name', 'customer_name', 'full_name', 'fullname', 'cust_name', 'client_name'], ['name'], $c_cols) ?? ($c_cols[1] ?? 'name');
+    }
+} catch (Exception $e) {}
+
 // --- MASTER CUSTOMER LIST INTEGRATION ---
 $master_customer_list = [
     "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
@@ -198,10 +210,10 @@ try {
             $cname = null;
             foreach ($crow as $k => $v) {
                 $k_lower = strtolower($k);
-                if (($k_lower === 'id' || $k_lower === 'customer_id' || $k_lower === 'cust_id') && is_numeric($v)) {
+                if (($k_lower === strtolower($cust_id_col) || $k_lower === 'id' || $k_lower === 'customer_id' || $k_lower === 'cust_id') && is_numeric($v)) {
                     $cid = (int)$v;
                 }
-                if (($k_lower === 'name' || $k_lower === 'customer_name' || $k_lower === 'full_name' || $k_lower === 'fullname') && !empty(trim((string)$v))) {
+                if (($k_lower === strtolower($cust_name_col) || strpos($k_lower, 'name') !== false) && !empty(trim((string)$v))) {
                     $cname = trim((string)$v);
                 }
             }
@@ -287,21 +299,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     // Dynamic resolution & auto-creation for customer_id and customer_name
     if (!empty($customer_name) && $customer_name !== '-') {
         $c_lower = strtolower($customer_name);
-        if (isset($customers_map[$c_lower])) {
+        if (isset($customers_map[$c_lower]) && $customers_map[$c_lower]) {
             $selected_cust_id = $customers_map[$c_lower];
         } else {
             try {
-                $findCust = $pdo->prepare("SELECT id FROM customers WHERE LOWER(name) = LOWER(?) LIMIT 1");
+                $findCust = $pdo->prepare("SELECT {$cust_id_col} FROM customers WHERE LOWER({$cust_name_col}) = LOWER(?) LIMIT 1");
                 $findCust->execute([$customer_name]);
                 $foundId = $findCust->fetchColumn();
                 if ($foundId) {
                     $selected_cust_id = (int)$foundId;
                 } else {
-                    $insCust = $pdo->prepare("INSERT INTO customers (name) VALUES (?) RETURNING id");
-                    $insCust->execute([$customer_name]);
-                    $selected_cust_id = (int)$insCust->fetchColumn();
+                    try {
+                        $insCust = $pdo->prepare("INSERT INTO customers ({$cust_name_col}) VALUES (?) RETURNING {$cust_id_col}");
+                        $insCust->execute([$customer_name]);
+                        $selected_cust_id = (int)$insCust->fetchColumn();
+                    } catch (Exception $e1) {
+                        $insCust = $pdo->prepare("INSERT INTO customers ({$cust_name_col}) VALUES (?)");
+                        $insCust->execute([$customer_name]);
+                        $selected_cust_id = (int)$pdo->lastInsertId();
+                    }
                 }
-            } catch (Exception $e) {}
+            } catch (Exception $e2) {}
         }
     }
     
@@ -341,12 +359,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         continue;
                     }
 
+                    $is_int_col = isIntColumn($col, $tx_col_types);
+
                     // 1. Foreign Key Product ID
-                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
+                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id']) || ($is_int_col && (strpos($c, 'product') !== false || strpos($c, 'item') !== false) && strpos($c, 'code') === false)) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
                     // 2. Foreign Key Customer ID
-                    elseif (in_array($c, ['customer_id', 'cust_id'])) {
+                    elseif (in_array($c, ['customer_id', 'cust_id', 'client_id']) || ($is_int_col && (strpos($c, 'cust') !== false || strpos($c, 'client') !== false))) {
                         $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                     }
                     // 3. Product Code / Barcode (Text)
@@ -359,7 +379,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                     // 5. Customer Name (Text)
                     elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || (strpos($c, 'cust') !== false && strpos($c, 'id') === false)) {
-                        $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
+                        if ($is_int_col) {
+                            $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
+                        } else {
+                            $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
+                        }
                     }
                     // 6. Dates
                     elseif (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
@@ -951,25 +975,43 @@ try {
                                     }
                                 }
 
-                                // 3. Dynamic Customer Name Resolution via customer_name or customer_id FK
+                                // 3. Dynamic Customer Name Resolution
                                 $cust_val = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
-                                if ($cust_val === '-' || empty($cust_val)) {
-                                    $c_id = getTxVal($tx, ['customer_id', 'cust_id'], [], null);
-                                    if (!$c_id) {
-                                        foreach ($tx as $k => $v) {
-                                            if (strpos(strtolower($k), 'cust') !== false && strpos(strtolower($k), 'id') !== false && is_numeric($v)) {
-                                                $c_id = (int)$v;
-                                                break;
-                                            }
+
+                                $c_id = null;
+                                if (is_numeric($cust_val) && (int)$cust_val > 0) {
+                                    $c_id = (int)$cust_val;
+                                    $cust_val = '-';
+                                } else {
+                                    $c_id = getTxVal($tx, ['customer_id', 'cust_id', 'client_id'], [], null);
+                                }
+
+                                if (!$c_id) {
+                                    foreach ($tx as $k => $v) {
+                                        $k_lower = strtolower($k);
+                                        if ((strpos($k_lower, 'cust') !== false || strpos($k_lower, 'client') !== false) && is_numeric($v) && (int)$v > 0) {
+                                            $c_id = (int)$v;
+                                            break;
                                         }
                                     }
-                                    if ($c_id && is_numeric($c_id)) {
-                                        foreach ($customers_data as $cd) {
-                                            if ($cd['id'] == $c_id) {
-                                                $cust_val = $cd['name'];
-                                                break;
-                                            }
+                                }
+
+                                if ($c_id && is_numeric($c_id)) {
+                                    foreach ($customers_data as $cd) {
+                                        if ($cd['id'] == $c_id) {
+                                            $cust_val = $cd['name'];
+                                            break;
                                         }
+                                    }
+                                    if ($cust_val === '-' || empty($cust_val)) {
+                                        try {
+                                            $qC = $pdo->prepare("SELECT {$cust_name_col} FROM customers WHERE {$cust_id_col} = ? LIMIT 1");
+                                            $qC->execute([$c_id]);
+                                            $fetched_name = $qC->fetchColumn();
+                                            if ($fetched_name) {
+                                                $cust_val = $fetched_name;
+                                            }
+                                        } catch (Exception $e) {}
                                     }
                                 }
 
@@ -1115,6 +1157,8 @@ try {
         }
 
         document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            syncCustomerId();
+
             if (cart.length === 0) {
                 e.preventDefault();
                 alert('Please scan or add at least one product to the cart before processing.');
