@@ -959,12 +959,7 @@ try {
 <div class="main-container">
     <!-- Left Panel: POS / New Transaction Form -->
     <div class="panel-card">
-        <div class="panel-header-flex">
-    <h2 class="panel-title" style="margin: 0;">Recent Transactions</h2>
-    <a href="credit.php" class="credit-shortcut-btn">
-        📋 View Credit List
-    </a>
-</div>
+    <h2 class="panel-title">Recent Transactions</h2>
         <form method="POST" action="stockout.php" id="txForm">
             <input type="hidden" name="process_batch_transaction" value="1">
             <input type="hidden" name="items_payload" id="items_payload" value="[]">
@@ -1050,7 +1045,12 @@ try {
 
     <!-- Right Panel: Recent Transactions History -->
     <div class="panel-card">
-        <h2 class="panel-title">Recent Transactions</h2>
+     <div class="panel-header-flex">
+    <h2 class="panel-title" style="margin: 0;">Recent Transactions</h2>
+    <a href="credit.php" class="credit-shortcut-btn">
+        📋 View Credit List
+    </a>
+</div>
         <div style="overflow-x: auto;">
             <table class="history-table">
                 <thead>
