@@ -920,6 +920,18 @@ try {
 .credit-shortcut-btn:hover {
     background-color: #4338ca;
 }
+        .table-responsive-scroll {
+    max-height: 450px; /* Baguhin ang taas depende sa gusto mo */
+    overflow-y: auto;
+    position: relative;
+}
+
+.table-responsive-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: #fef9c3; /* Kulay ng header para hindi luminaw ang laman sa ilalim */
+}
     </style>
 </head>
 <body>
@@ -1043,7 +1055,7 @@ try {
         </form>
     </div>
 
-    <!-- Right Panel: Recent Transactions History -->
+  <!-- Right Panel: Recent Transactions History -->
     <div class="panel-card">
      <div class="panel-header-flex">
     <h2 class="panel-title" style="margin: 0;">Recent Transactions</h2>
@@ -1051,18 +1063,19 @@ try {
         📋 View Credit List
     </a>
 </div>
-        <div style="overflow-x: auto;">
-            <table class="history-table">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Type</th>
-                        <th>Customer</th>
-                        <th>Item / Particulars</th>
-                        <th>Qty</th>
-                        <th>Price</th>
-                        <th>Amount</th>
-                        <th>Action</th>
+        <!-- Nagdagdag tayo ng wrapper na may max-height at overflow-y para sa vertical scroll bar -->
+        <div style="max-height: 480px; overflow-y: auto; position: relative; border-radius: 8px;">
+            <table class="history-table" style="width: 100%; border-collapse: collapse;">
+                <thead style="position: sticky; top: 0; z-index: 10;">
+                    <tr style="background-color: #fef9c3;">
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Date</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Type</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Customer</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Item / Particulars</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Qty</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Price</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Amount</th>
+                        <th style="position: sticky; top: 0; background-color: #fef9c3; padding: 12px;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
