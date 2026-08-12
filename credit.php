@@ -1,60 +1,81 @@
 <?php
 require_once 'db.php'; 
 
-// 1. Inspect table columns directly from PostgreSQL metadata
-$typeCol = 'transaction_type'; // Default fallback
+// 1. Reliably extract actual column names from the 'transactions' table
+$columns = [];
 try {
-    $stmt = $pdo->query("SELECT * FROM transactions LIMIT 0");
-    for ($i = 0; $i < $stmt->columnCount(); $i++) {
-        $meta = $stmt->getColumnMeta($i);
-        $colName = $meta['name'];
-        if (in_array(strtolower($colName), ['type', 'transaction_type', 'trans_type', 'payment_type'])) {
-            $typeCol = $colName;
-            break;
-        }
+    $sample = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if ($sample !== false) {
+        $columns = array_keys($sample);
+    } else {
+        $stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions'");
+        $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 } catch (Exception $e) {
-    // Keeps fallback 'transaction_type' if table inspection fails
+    // Failover
 }
 
-// Escape column identifier for PostgreSQL queries
+// 2. Identify the transaction type column name dynamically
+$typeCol = null;
+$candidateNames = ['transaction_type', 'type', 'trans_type', 'transtype', 'payment_type', 'category', 'kind', 'status'];
+
+foreach ($columns as $col) {
+    if (in_array(strtolower($col), $candidateNames)) {
+        $typeCol = $col;
+        break;
+    }
+}
+
+// Default fallback if no match found in candidates
+$typeCol = $typeCol ?: 'transaction_type';
 $typeColSql = '"' . str_replace('"', '""', $typeCol) . '"';
 
-// 2. Fetch summary metric card totals
-$summaryQuery = "
-    SELECT 
-        COALESCE(SUM(CASE WHEN {$typeColSql} = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
-        COALESCE(SUM(CASE WHEN {$typeColSql} = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
-    FROM transactions
-";
+// 3. Fetch summary metrics
+$totalStoreCredit = 0;
+$totalPayment = 0;
+$totalBalance = 0;
 
 try {
+    $summaryQuery = "
+        SELECT 
+            COALESCE(SUM(CASE WHEN {$typeColSql} = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
+            COALESCE(SUM(CASE WHEN {$typeColSql} = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
+        FROM transactions
+    ";
     $summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
+    $totalStoreCredit = $summary['total_store_credit'] ?? 0;
+    $totalPayment = $summary['total_payment'] ?? 0;
+    $totalBalance = $totalStoreCredit - $totalPayment;
 } catch (Exception $e) {
-    die("<div style='padding:20px; background:#fee2e2; color:#991b1b; font-family:sans-serif;'>
-            <strong>Database Error:</strong> " . htmlspecialchars($e->getMessage()) . "
-         </div>");
+    die("
+        <div style='font-family: sans-serif; padding: 24px; background: #fee2e2; color: #991b1b; border-radius: 8px; margin: 20px;'>
+            <h3 style='margin-top:0;'>Database Column Error</h3>
+            <p><strong>Query Error:</strong> " . htmlspecialchars($e->getMessage()) . "</p>
+            <p><strong>Detected columns in 'transactions' table:</strong> " . htmlspecialchars(implode(', ', $columns)) . "</p>
+        </div>
+    ");
 }
 
-$totalStoreCredit = $summary['total_store_credit'] ?? 0;
-$totalPayment = $summary['total_payment'] ?? 0;
-$totalBalance = $totalStoreCredit - $totalPayment;
-
-// 3. Fetch customer credit ledger balances aggregated by customer_id
-$ledgerQuery = "
-    SELECT 
-        c.id AS customer_id,
-        c.name AS customer_name,
-        COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
-        COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
-        (COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) - 
-         COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
-    FROM customers c
-    LEFT JOIN transactions t ON c.id = t.customer_id
-    GROUP BY c.id, c.name
-    ORDER BY c.name ASC
-";
-$ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
+// 4. Fetch customer ledger balances grouped by customer_id
+$ledgerRows = [];
+try {
+    $ledgerQuery = "
+        SELECT 
+            c.id AS customer_id,
+            c.name AS customer_name,
+            COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
+            COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
+            (COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Credit' THEN t.amount ELSE 0 END), 0) - 
+             COALESCE(SUM(CASE WHEN t.{$typeColSql} = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
+        FROM customers c
+        LEFT JOIN transactions t ON c.id = t.customer_id
+        GROUP BY c.id, c.name
+        ORDER BY c.name ASC
+    ";
+    $ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    // Graceful fallback
+}
 ?>
 
 <!DOCTYPE html>
