@@ -31,30 +31,24 @@ try {
     // Fallback name
 }
 
-// 2. Detect Item Description column dynamically from transactions table
-$itemExpr = "''";
+// 2. Detect Description column dynamically from transactions table
+$itemExpr = 't."description"';
 try {
     $sampleTx = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
     if ($sampleTx !== false) {
         $txCols = array_map('strtolower', array_keys($sampleTx));
-        if (in_array('item_name', $txCols)) {
-            $itemExpr = 't."item_name"';
-        } elseif (in_array('description', $txCols)) {
+        if (in_array('description', $txCols)) {
             $itemExpr = 't."description"';
-        } elseif (in_array('product_name', $txCols)) {
-            $itemExpr = 't."product_name"';
         } elseif (in_array('item_description', $txCols)) {
             $itemExpr = 't."item_description"';
-        } elseif (in_array('details', $txCols)) {
-            $itemExpr = 't."details"';
-        } elseif (in_array('particulars', $txCols)) {
-            $itemExpr = 't."particulars"';
-        } elseif (in_array('item', $txCols)) {
-            $itemExpr = 't."item"';
+        } elseif (in_array('item_name', $txCols)) {
+            $itemExpr = 't."item_name"';
+        } elseif (in_array('product_name', $txCols)) {
+            $itemExpr = 't."product_name"';
         }
     }
 } catch (Exception $e) {
-    $itemExpr = "''";
+    $itemExpr = 't."description"';
 }
 
 // 3. Fetch Customer Transactions
@@ -167,8 +161,8 @@ $balance = $totalCredit - $totalPayment;
                                     </td>
                                     <td class="p-3 text-gray-800 font-medium">
                                         <?php 
-                                            $desc = !empty($tx['item_description']) ? $tx['item_description'] : '';
-                                            if (empty($desc)) {
+                                            $desc = trim($tx['item_description'] ?? '');
+                                            if ($desc === '' || $desc === '-') {
                                                 $desc = (strcasecmp($tx['payment_type'], 'Payment') === 0) ? 'Payment Received' : '-';
                                             }
                                             echo htmlspecialchars($desc);
