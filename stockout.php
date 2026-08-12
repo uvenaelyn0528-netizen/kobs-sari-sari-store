@@ -9,7 +9,7 @@ require_once 'db.php';
 $today = date('Y-m-d');
 $error_message = '';
 
-// Safe 32-Bit Integer Helper (Prevents PostgreSQL integer overflow/FK violations)
+// Safe 32-Bit Integer Helper
 function safeInt32($val, $fallback = null) {
     if (!is_numeric($val) || $val === null || $val === '' || $val === '-' || (int)$val === 0) return $fallback;
     $num = (float)$val;
@@ -19,7 +19,7 @@ function safeInt32($val, $fallback = null) {
     return (int)$num;
 }
 
-// --- HELPER FUNCTION FOR FLEXIBLE ROW VALUE EXTRACTION ---
+// Helper function for flexible row value extraction
 function getTxVal($row, $candidates, $keywords = [], $default = '-') {
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
@@ -42,7 +42,7 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
     return $default;
 }
 
-// --- 1. INSPECT 'TRANSACTIONS' TABLE COLUMNS & DATA TYPES ---
+// 1. Inspect 'transactions' table columns & data types
 $tx_columns = [];
 $tx_col_types = [];
 $generated_cols = [];
@@ -101,7 +101,7 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     return null;
 }
 
-// Comprehensive Column candidate field maps
+// Column candidate field maps
 $code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
 $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
@@ -114,7 +114,6 @@ $desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
 
-// Expanded transaction type candidates to match any database schema variation
 $type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type', 'payment_method', 'method', 'trans_mode', 'trx_type', 'trx_mode', 'kind', 'action', 'entry_type', 'stock_type'];
 $type_keywords   = ['type', 'mode', 'pay', 'method', 'kind', 'trx'];
 
@@ -129,7 +128,7 @@ $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
 $pk_col = $tx_columns[0] ?? 'id';
 
-// --- 2. PRE-DETECT PRODUCTS & CUSTOMERS TABLES ---
+// 2. Pre-detect products & customers tables
 $prod_qty_col = null;
 $prod_code_col = null;
 
@@ -142,7 +141,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Detect 'customers' table columns dynamically
 $cust_id_col = 'id';
 $cust_name_col = 'name';
 try {
@@ -154,7 +152,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- MASTER CUSTOMER LIST INTEGRATION ---
+// Master Customer List Integration
 $master_customer_list = [
     "Abrajano, Dandreb", "Abrajano, Victoria", "Abug, Milecha", "Abulencia, Dennes", 
     "Aguilo, Kim", "Aguindao, Omar", "Albia, Jhonmark", "Amoguis, Joshua Rheynaird", 
@@ -200,9 +198,8 @@ $master_customer_list = [
 ];
 
 $customers_data = [];
-$customers_map  = []; // Lowercase Name -> Customer ID
+$customers_map  = [];
 
-// Fetch existing customers from database table to map IDs
 try {
     $c_stmt = $pdo->query("SELECT * FROM customers ORDER BY 1 ASC");
     if ($c_stmt) {
@@ -225,7 +222,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Consolidate master customer list and DB records
 $all_customers_set = [];
 foreach ($master_customer_list as $m_name) {
     $clean_name = rtrim(trim($m_name), ',');
@@ -252,7 +248,7 @@ usort($customers_data, function($a, $b) {
     return strnatcasecmp($a['name'], $b['name']);
 });
 
-// --- FETCH PRODUCTS FOR LOOKUP ---
+// Fetch products for lookup
 $products_map = [];
 $products_by_id = [];
 try {
@@ -288,23 +284,25 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- HANDLE BATCH TRANSACTION SUBMISSION ---
+// Handle transaction submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
-    // Strictly read transaction type from POST payload
     $raw_tx_type = trim($_POST['tx_type'] ?? 'Cash');
-    $valid_tx_types = ['Cash', 'Credit', 'Payment'];
+    
+    // Updated valid transaction choices
+    $valid_tx_types = ['Cash', 'Credit', 'Partial Payment', 'Full Payment'];
     $tx_type = in_array($raw_tx_type, $valid_tx_types) ? $raw_tx_type : 'Cash';
 
     $customer_name = trim($_POST['customer_name'] ?? '');
     $selected_cust_id = !empty($_POST['customer_id_val']) ? (int)$_POST['customer_id_val'] : null;
     $tx_date = $_POST['tx_date'] ?? $today;
 
-    if ($tx_type === 'Payment') {
+    // Handle Payment types
+    if (in_array($tx_type, ['Partial Payment', 'Full Payment'])) {
         $pay_amt = (float)($_POST['payment_amount'] ?? 0);
         $items = [[
             'id'        => null,
             'code'      => 'PAYMENT',
-            'name'      => 'Account Payment',
+            'name'      => 'Account Payment (' . $tx_type . ')',
             'qty'       => 1,
             'price'     => $pay_amt,
             'buy_price' => 0
@@ -314,7 +312,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         $items = json_decode($items_raw, true);
     }
 
-    // Dynamic resolution & auto-creation for customer_id and customer_name
+    // Customer Lookup / Auto-creation
     if (!empty($customer_name) && $customer_name !== '-') {
         $c_lower = strtolower($customer_name);
         if (isset($customers_map[$c_lower]) && $customers_map[$c_lower]) {
@@ -379,23 +377,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                     $is_int_col = isIntColumn($col, $tx_col_types);
 
-                    // 1. Foreign Key Product ID
                     if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id']) || ($is_int_col && (strpos($c, 'product') !== false || strpos($c, 'item') !== false) && strpos($c, 'code') === false)) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
-                    // 2. Foreign Key Customer ID
                     elseif (in_array($c, ['customer_id', 'cust_id', 'client_id']) || ($is_int_col && (strpos($c, 'cust') !== false || strpos($c, 'client') !== false))) {
                         $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                     }
-                    // 3. Product Code / Barcode (Text)
                     elseif (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || (strpos($c, 'code') !== false && strpos($c, 'id') === false) || strpos($c, 'barcode') !== false) {
                         $insert_data[$col] = $barcode;
                     }
-                    // 4. Item Description / Name (Text)
                     elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
                         $insert_data[$col] = (string)$desc;
                     }
-                    // 5. Customer Name (Text)
                     elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || (strpos($c, 'cust') !== false && strpos($c, 'id') === false)) {
                         if ($is_int_col) {
                             $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
@@ -403,19 +396,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                             $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
                         }
                     }
-                    // 6. Dates
                     elseif (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
                         $insert_data[$col] = $tx_date;
                     }
-                    // 7. Quantity
                     elseif (in_array($c, ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count']) || strpos($c, 'qty') !== false) {
                         $insert_data[$col] = $qty;
                     }
-                    // 8. Type / Mode / Method (Enhanced detection for all column naming variations)
                     elseif (in_array($c, array_map('strtolower', $type_candidates)) || strpos($c, 'type') !== false || strpos($c, 'mode') !== false || strpos($c, 'method') !== false) {
                         $insert_data[$col] = $tx_type;
                     }
-                    // 9. Amounts
                     elseif (in_array($c, ['amount', 'subtotal', 'total', 'grand_total', 'val', 'price_total'])) {
                         $insert_data[$col] = $amount;
                     }
@@ -427,7 +416,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Default assignment for unmapped columns
+                // Default unmapped column handling
                 try {
                     $nn_stmt = $pdo->query("
                         SELECT column_name, data_type, is_nullable 
@@ -464,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 } catch (Exception $e) {}
 
-                // STRICT FOREIGN KEY & DATA TYPE SANITIZATION
+                // Foreign key and integer sanitization
                 foreach ($insert_data as $f_col => $f_val) {
                     $c_lower = strtolower($f_col);
                     $is_fk_or_id = (substr($c_lower, -3) === '_id' || $c_lower === 'id' || in_array($c_lower, array_map('strtolower', $id_candidates)));
@@ -478,7 +467,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     }
                 }
 
-                // Execute INSERT query
                 $fields = array_keys($insert_data);
                 $placeholders = array_map(function($f) { return ':' . $f; }, $fields);
 
@@ -491,8 +479,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct stock from products (Only for Cash and Credit)
-                if ($tx_type !== 'Payment' && $prod_qty_col && $prod_code_col) {
+                // Deduct stock only for product sales (not for payments)
+                if (!in_array($tx_type, ['Partial Payment', 'Full Payment']) && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
                         SET {$prod_qty_col} = {$prod_qty_col} - :qty 
@@ -516,7 +504,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     }
 }
 
-// --- HANDLE DELETION ---
+// Handle record deletion
 if (isset($_GET['delete_id'])) {
     $delete_id = $_GET['delete_id'];
     try {
@@ -527,7 +515,7 @@ if (isset($_GET['delete_id'])) {
     exit();
 }
 
-// --- FETCH DASHBOARD TOTALS ---
+// Fetch dashboard totals
 $total_cash_today = 0;
 $payment_today = 0;
 $cash_sales_today = 0;
@@ -543,7 +531,8 @@ try {
         $stmt->execute([$today]);
         $cash_sales_today = (float)$stmt->fetchColumn();
 
-        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND LOWER({$col_type}) = 'payment'");
+        // Calculate payments collected today
+        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND LOWER({$col_type}) IN ('full payment', 'partial payment', 'payment')");
         $stmt->execute([$today]);
         $payment_today = (float)$stmt->fetchColumn();
 
@@ -554,7 +543,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// --- FETCH RECENT TRANSACTIONS ---
+// Fetch recent transactions
 $transactions = [];
 try {
     $tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY 1 DESC LIMIT 50");
@@ -814,7 +803,8 @@ try {
         }
         .badge.cash { background: #dcfce7; color: #15803d; }
         .badge.credit { background: #ffedd5; color: #c2410c; }
-        .badge.payment { background: #dbeafe; color: #1e40af; }
+        .badge.partial-payment { background: #ccfbf1; color: #115e59; }
+        .badge.full-payment { background: #a7f3d0; color: #065f46; }
 
         .btn-delete {
             color: #ef4444;
@@ -891,9 +881,10 @@ try {
             <div class="form-group">
                 <label for="tx_type">Transaction Type</label>
                 <select name="tx_type" id="tx_type" class="form-control" onchange="handleTxTypeChange()">
-                    <option value="Cash">Cash Sale</option>
-                    <option value="Credit">Credit / On Account</option>
-                    <option value="Payment">Account Payment</option>
+                    <option value="Cash">Cash</option>
+                    <option value="Credit">Credit</option>
+                    <option value="Partial Payment">Partial Payment</option>
+                    <option value="Full Payment">Full Payment</option>
                 </select>
             </div>
 
@@ -998,7 +989,16 @@ try {
                             $t_price = getTxVal($tx, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
                             $t_amt   = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
 
-                            $badge_cls = strtolower($t_type) === 'credit' ? 'credit' : (strtolower($t_type) === 'payment' ? 'payment' : 'cash');
+                            $t_type_lower = strtolower($t_type);
+                            if ($t_type_lower === 'credit') {
+                                $badge_cls = 'credit';
+                            } elseif ($t_type_lower === 'partial payment') {
+                                $badge_cls = 'partial-payment';
+                            } elseif ($t_type_lower === 'full payment') {
+                                $badge_cls = 'full-payment';
+                            } else {
+                                $badge_cls = 'cash';
+                            }
                         ?>
                             <tr>
                                 <td><?= htmlspecialchars(date('M d, Y', strtotime($t_date))) ?></td>
@@ -1040,7 +1040,7 @@ try {
             custSection.style.display = 'block';
             paymentSection.style.display = 'none';
             itemsSection.style.display = 'block';
-        } else if (txType === 'Payment') {
+        } else if (['Partial Payment', 'Full Payment'].includes(txType)) {
             custSection.style.display = 'block';
             paymentSection.style.display = 'block';
             itemsSection.style.display = 'none';
@@ -1152,14 +1152,14 @@ try {
             custIdVal.value = '';
         }
 
-        if (txType === 'Credit' || txType === 'Payment') {
+        if (['Credit', 'Partial Payment', 'Full Payment'].includes(txType)) {
             if (!custInput) {
                 alert('Please select or enter a Customer Name for ' + txType + ' transactions.');
                 return false;
             }
         }
 
-        if (txType === 'Payment') {
+        if (['Partial Payment', 'Full Payment'].includes(txType)) {
             const payAmt = parseFloat(document.getElementById('payment_amount').value);
             if (!payAmt || payAmt <= 0) {
                 alert('Please enter a valid payment amount.');
