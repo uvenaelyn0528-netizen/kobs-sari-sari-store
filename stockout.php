@@ -108,8 +108,8 @@ $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 $id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
 $id_keywords     = ['product_id', 'item_id'];
 
-$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc'];
-$desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_name', 'product_desc'];
+$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name'];
+$desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_name', 'product_desc', 'name'];
 
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
@@ -188,7 +188,6 @@ $master_customer_list = [
 
 $customers_data = [];
 $customers_map  = []; // Lowercase Name -> Customer ID
-$id_to_customer_map = []; // Customer ID -> Name
 
 // Fetch existing customers from database table to map IDs
 try {
@@ -208,9 +207,6 @@ try {
             }
             if ($cname) {
                 $customers_map[strtolower($cname)] = $cid;
-                if ($cid) {
-                    $id_to_customer_map[$cid] = $cname;
-                }
             }
         }
     }
@@ -225,14 +221,12 @@ foreach ($master_customer_list as $m_name) {
     }
 }
 
-// Add any DB-only customer names to set
 foreach ($customers_map as $low_name => $cid) {
     if (!isset($all_customers_set[$low_name])) {
         $all_customers_set[$low_name] = ucwords($low_name);
     }
 }
 
-// Build final customers data array
 foreach ($all_customers_set as $low_name => $disp_name) {
     $cid = $customers_map[$low_name] ?? null;
     $customers_data[] = [
@@ -241,10 +235,45 @@ foreach ($all_customers_set as $low_name => $disp_name) {
     ];
 }
 
-// Sort customer list alphabetically
 usort($customers_data, function($a, $b) {
     return strnatcasecmp($a['name'], $b['name']);
 });
+
+// --- FETCH PRODUCTS FOR LOOKUP ---
+$products_map = [];
+$products_by_id = [];
+try {
+    $prod_stmt = $pdo->query("SELECT * FROM products");
+    while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $code = getTxVal($p, $code_candidates, $code_keywords, null);
+        $name = getTxVal($p, $desc_candidates, $desc_keywords, 'Product Item');
+        $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
+        $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], 0);
+
+        $p_id = 0;
+        foreach (['id', 'product_id', 'item_id', 'prod_id', 'p_id'] as $id_key) {
+            if (isset($p[$id_key]) && is_numeric($p[$id_key]) && (int)$p[$id_key] > 0) {
+                $p_id = (int)$p[$id_key];
+                break;
+            }
+        }
+
+        $prod_info = [
+            'id'        => $p_id,
+            'code'      => $code,
+            'name'      => $name,
+            'price'     => (float)$price,
+            'buy_price' => (float)$buy_price
+        ];
+
+        if ($code !== null && trim((string)$code) !== '') {
+            $products_map[trim((string)$code)] = $prod_info;
+        }
+        if ($p_id > 0) {
+            $products_by_id[$p_id] = $prod_info;
+        }
+    }
+} catch (Exception $e) {}
 
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
@@ -255,22 +284,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     $items_raw = $_POST['items_payload'] ?? '[]';
     $items = json_decode($items_raw, true);
 
-    // If Credit or Payment, ensure a valid customer is set
-    if ($tx_type === 'Credit' || $tx_type === 'Payment') {
-        if (empty($customer_name) || $customer_name === '-') {
-            $customer_name = 'Walk-in Credit';
-        }
-    } else {
-        $selected_cust_id = null;
-        $customer_name = '-';
-    }
-
-    // Dynamic resolution for customer_id
-    if (!$selected_cust_id && !empty($customer_name) && $customer_name !== '-') {
+    // Dynamic resolution & auto-creation for customer_id and customer_name
+    if (!empty($customer_name) && $customer_name !== '-') {
         $c_lower = strtolower($customer_name);
         if (isset($customers_map[$c_lower])) {
             $selected_cust_id = $customers_map[$c_lower];
+        } else {
+            try {
+                $findCust = $pdo->prepare("SELECT id FROM customers WHERE LOWER(name) = LOWER(?) LIMIT 1");
+                $findCust->execute([$customer_name]);
+                $foundId = $findCust->fetchColumn();
+                if ($foundId) {
+                    $selected_cust_id = (int)$foundId;
+                } else {
+                    $insCust = $pdo->prepare("INSERT INTO customers (name) VALUES (?) RETURNING id");
+                    $insCust->execute([$customer_name]);
+                    $selected_cust_id = (int)$insCust->fetchColumn();
+                }
+            } catch (Exception $e) {}
         }
+    }
+    
+    if ($selected_cust_id && empty($customer_name)) {
+        foreach ($customers_data as $cd) {
+            if ($cd['id'] == $selected_cust_id) {
+                $customer_name = $cd['name'];
+                break;
+            }
+        }
+    }
+
+    if ($tx_type === 'Cash' && empty($customer_name)) {
+        $customer_name = '-';
+        $selected_cust_id = null;
     }
 
     if (!empty($items) && is_array($items)) {
@@ -295,43 +341,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                         continue;
                     }
 
-                    // Product Code / Barcode assignment
-                    if (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || strpos($c, 'code') !== false || strpos($c, 'barcode') !== false) {
-                        $insert_data[$col] = $barcode;
-                    }
-
-                    // Item Description assignment
-                    elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
-                        $insert_data[$col] = (string)$desc;
-                    }
-
-                    // Foreign Key Product ID
-                    elseif (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
+                    // 1. Foreign Key Product ID
+                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id'])) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
-
-                    // Foreign Key Customer ID & Customer Name
-                    elseif ($c === 'customer_id' || $c === 'cust_id' || $c === 'client_id') {
+                    // 2. Foreign Key Customer ID
+                    elseif (in_array($c, ['customer_id', 'cust_id'])) {
                         $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                     }
-                    elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || strpos($c, 'cust') !== false) {
-                        if (substr($c, -3) === '_id') {
-                            $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
-                        } else {
-                            $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
-                        }
+                    // 3. Product Code / Barcode (Text)
+                    elseif (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || (strpos($c, 'code') !== false && strpos($c, 'id') === false) || strpos($c, 'barcode') !== false) {
+                        $insert_data[$col] = $barcode;
                     }
-
-                    // Quantities, Amounts, Prices, Date, Type
+                    // 4. Item Description / Name (Text)
+                    elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
+                        $insert_data[$col] = (string)$desc;
+                    }
+                    // 5. Customer Name (Text)
+                    elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || (strpos($c, 'cust') !== false && strpos($c, 'id') === false)) {
+                        $insert_data[$col] = !empty($customer_name) ? $customer_name : '-';
+                    }
+                    // 6. Dates
                     elseif (in_array($c, ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date']) || strpos($c, 'date') !== false) {
                         $insert_data[$col] = $tx_date;
                     }
+                    // 7. Quantity
                     elseif (in_array($c, ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count']) || strpos($c, 'qty') !== false) {
                         $insert_data[$col] = $qty;
                     }
+                    // 8. Type
                     elseif (in_array($c, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type']) || strpos($c, 'type') !== false) {
                         $insert_data[$col] = $tx_type;
                     }
+                    // 9. Amounts
                     elseif (in_array($c, ['amount', 'subtotal', 'total', 'grand_total', 'val', 'price_total'])) {
                         $insert_data[$col] = $amount;
                     }
@@ -467,42 +509,6 @@ try {
 
         $stmt = $pdo->query("SELECT SUM({$col_amt}) FROM transactions WHERE {$col_type} = 'Credit'");
         $total_credit = (float)$stmt->fetchColumn();
-    }
-} catch (Exception $e) {}
-
-// --- FETCH PRODUCTS FOR LOOKUP ---
-$products_map = [];
-$products_by_id = [];
-try {
-    $prod_stmt = $pdo->query("SELECT * FROM products");
-    while ($p = $prod_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $code = getTxVal($p, $code_candidates, $code_keywords, null);
-        $name = getTxVal($p, $desc_candidates, $desc_keywords, 'Product Item');
-        $price = getTxVal($p, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
-        $buy_price = getTxVal($p, ['buy_price', 'cost_price', 'cost', 'purchase_price'], ['cost', 'buy'], 0);
-
-        $p_id = 0;
-        foreach (['id', 'product_id', 'item_id', 'prod_id', 'p_id'] as $id_key) {
-            if (isset($p[$id_key]) && is_numeric($p[$id_key]) && (int)$p[$id_key] > 0) {
-                $p_id = (int)$p[$id_key];
-                break;
-            }
-        }
-
-        $prod_info = [
-            'id'        => $p_id,
-            'code'      => $code,
-            'name'      => $name,
-            'price'     => (float)$price,
-            'buy_price' => (float)$buy_price
-        ];
-
-        if ($code !== null && trim((string)$code) !== '') {
-            $products_map[trim((string)$code)] = $prod_info;
-        }
-        if ($p_id > 0) {
-            $products_by_id[$p_id] = $prod_info;
-        }
     }
 } catch (Exception $e) {}
 
@@ -766,13 +772,8 @@ try {
         }
 
         .badge-type.credit {
-            background-color: #fef3c7;
-            color: #d97706;
-        }
-
-        .badge-type.payment {
-            background-color: #e0e7ff;
-            color: #4338ca;
+            background-color: #fee2e2;
+            color: #dc2626;
         }
 
         .action-del {
@@ -834,6 +835,7 @@ try {
                 <input type="hidden" name="items_payload" id="items_payload" value="[]">
                 <input type="hidden" name="customer_id_val" id="customer_id_val" value="">
 
+                <!-- Transaction Type -->
                 <div class="form-group">
                     <label for="tx_type">Transaction Type</label>
                     <select name="tx_type" id="tx_type" class="form-control" onchange="toggleCustomerField()">
@@ -843,288 +845,289 @@ try {
                     </select>
                 </div>
 
-                <!-- DYNAMIC CUSTOMER FIELD (SHOWS WHEN CREDIT OR PAYMENT) -->
-                <div class="form-group" id="customer_group" style="display: none;">
-                    <label for="customer_input">Customer Name <span style="color: #ef4444;">*</span></label>
-                    <input type="text" name="customer_name" id="customer_input" list="customer_list" class="form-control" placeholder="Type or select customer name..." autocomplete="off">
+                <!-- Customer Selection Field -->
+                <div class="form-group" id="customerGroup">
+                    <label for="customer_name">Customer Name</label>
+                    <input type="text" name="customer_name" id="customer_name" class="form-control" list="customer_list" placeholder="Select or type customer name..." autocomplete="off" onchange="syncCustomerId()" oninput="syncCustomerId()">
                     <datalist id="customer_list">
                         <?php foreach ($customers_data as $cust): ?>
-                            <option value="<?php echo htmlspecialchars($cust['name']); ?>" data-id="<?php echo $cust['id'] ?? ''; ?>"></option>
+                            <option data-id="<?php echo $cust['id']; ?>" value="<?php echo htmlspecialchars($cust['name']); ?>"></option>
                         <?php endforeach; ?>
                     </datalist>
                 </div>
 
+                <!-- Barcode & Item Scan Section -->
                 <div class="form-group">
                     <label>Product Barcode / Code</label>
                     <div class="scan-row">
-                        <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus autocomplete="off">
+                        <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus onkeypress="if(event.key==='Enter'){event.preventDefault(); addToCart();}">
                         <input type="number" id="scan_qty" class="form-control" value="1" min="1">
-                        <button type="button" class="add-btn" onclick="addItemToCart()">+</button>
+                        <button type="button" class="add-btn" onclick="addToCart()">+</button>
                     </div>
                 </div>
 
-                <!-- CART BOX -->
+                <!-- Scanned Cart Table -->
                 <div class="cart-box">
                     <table class="cart-table">
                         <thead>
                             <tr>
                                 <th>Item / Code</th>
-                                <th style="width: 40px; text-align: center;">Qty</th>
-                                <th style="width: 60px; text-align: right;">Price</th>
-                                <th style="width: 65px; text-align: right;">Subtotal</th>
-                                <th style="width: 30px; text-align: center;"></th>
+                                <th>Qty</th>
+                                <th>Price</th>
+                                <th>Subtotal</th>
+                                <th></th>
                             </tr>
                         </thead>
                         <tbody id="cartTableBody">
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">No items scanned yet.</td>
+                            <tr id="emptyCartRow">
+                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
 
+                <!-- Cart Total -->
                 <div class="cart-summary">
                     <span class="label">Total Amount:</span>
                     <span class="total-value" id="cartTotalDisplay">₱0.00</span>
                 </div>
 
+                <!-- Date -->
                 <div class="form-group">
                     <label for="tx_date">Date</label>
                     <input type="date" name="tx_date" id="tx_date" class="form-control" value="<?php echo $today; ?>">
                 </div>
 
-                <button type="submit" class="process-btn" id="submitBtn">Process Transaction</button>
+                <button type="submit" class="process-btn">Process Transaction</button>
             </form>
         </div>
 
         <!-- TRANSACTION HISTORY LOG -->
         <div class="panel-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h2 class="panel-title" style="margin: 0;">Transaction History Log</h2>
-                <input type="text" id="historySearch" placeholder="Search transactions..." class="form-control" style="width: 220px; padding: 6px 10px;">
-            </div>
+            <h2 class="panel-title">Transaction History Log</h2>
 
-            <div style="overflow-x: auto;">
-                <table class="history-table">
-                    <thead>
-                        <tr>
-                            <th>CODE</th>
-                            <th>DATE</th>
-                            <th>QTY</th>
-                            <th>TYPE</th>
-                            <th>CUSTOMER NAME</th>
-                            <th>DESCRIPTION</th>
-                            <th>AMOUNT</th>
-                            <th>ACTIONS</th>
-                        </tr>
-                    </thead>
-                    <tbody id="historyTableBody">
-                        <?php if (!empty($transactions)): ?>
-                            <?php foreach ($transactions as $tx): ?>
-                                <?php
-                                    $code = getTxVal($tx, $code_candidates, $code_keywords, '-');
-                                    $date = getTxVal($tx, $date_candidates, $date_keywords, '-');
-                                    $qty  = getTxVal($tx, $qty_candidates, $qty_keywords, 1);
-                                    $type = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
-                                    $desc = getTxVal($tx, $desc_candidates, $desc_keywords, '-');
-                                    $amt  = (float)getTxVal($tx, $amt_candidates, $amt_keywords, 0);
-                                    $id   = $tx[$pk_col] ?? 0;
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Date</th>
+                        <th>Qty</th>
+                        <th>Type</th>
+                        <th>Customer Name</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (!empty($transactions)): ?>
+                        <?php foreach ($transactions as $tx): ?>
+                            <?php
+                                // 1. Retrieve raw column values from transaction record
+                                $code_val = getTxVal($tx, $code_candidates, $code_keywords, '-');
+                                $date_val = getTxVal($tx, $date_candidates, $date_keywords, '-');
+                                $qty_val  = getTxVal($tx, $qty_candidates, $qty_keywords, '1');
+                                $type_val = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
+                                $desc_val = getTxVal($tx, $desc_candidates, $desc_keywords, '-');
+                                $amt_val  = (float)getTxVal($tx, $amt_candidates, $amt_keywords, 0);
 
-                                    // Dynamic resolution for Customer Name
-                                    $cust = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
-                                    if ($cust === '-' || empty($cust)) {
-                                        $c_id = getTxVal($tx, ['customer_id', 'cust_id', 'client_id'], ['customer_id', 'cust_id'], null);
-                                        if ($c_id && isset($id_to_customer_map[(int)$c_id])) {
-                                            $cust = $id_to_customer_map[(int)$c_id];
+                                // 2. Dynamic Product Code & Description Fallback via product_id / item_id FK
+                                $p_id = getTxVal($tx, ['product_id', 'item_id', 'prod_id', 'p_id'], [], null);
+                                if (!$p_id) {
+                                    foreach ($tx as $k => $v) {
+                                        if ((strpos(strtolower($k), 'product') !== false || strpos(strtolower($k), 'item') !== false) && strpos(strtolower($k), 'id') !== false && is_numeric($v)) {
+                                            $p_id = (int)$v;
+                                            break;
                                         }
                                     }
+                                }
 
-                                    $typeClass = '';
-                                    if (strtolower($type) === 'credit') $typeClass = 'credit';
-                                    elseif (strtolower($type) === 'payment') $typeClass = 'payment';
-                                ?>
-                                <tr>
-                                    <td style="font-weight: 700;"><?php echo htmlspecialchars($code); ?></td>
-                                    <td><?php echo htmlspecialchars(substr($date, 0, 10)); ?></td>
-                                    <td><?php echo htmlspecialchars($qty); ?></td>
-                                    <td><span class="badge-type <?php echo $typeClass; ?>"><?php echo htmlspecialchars($type); ?></span></td>
-                                    <td style="font-weight: 600; color: #334155;"><?php echo htmlspecialchars($cust); ?></td>
-                                    <td><?php echo htmlspecialchars($desc); ?></td>
-                                    <td style="font-weight: 700;">₱<?php echo number_format($amt, 2); ?></td>
-                                    <td>
-                                        <a href="stockout.php?delete_id=<?php echo urlencode($id); ?>" class="action-del" onclick="return confirm('Are you sure you want to delete this record?');">Delete</a>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
+                                if ($p_id && isset($products_by_id[$p_id])) {
+                                    if ($code_val === '-' || empty($code_val)) {
+                                        $code_val = $products_by_id[$p_id]['code'] ?? '-';
+                                    }
+                                    if ($desc_val === '-' || $desc_val === 'Item' || empty($desc_val)) {
+                                        $desc_val = $products_by_id[$p_id]['name'] ?? 'Item';
+                                    }
+                                }
+
+                                // 3. Dynamic Customer Name Resolution via customer_name or customer_id FK
+                                $cust_val = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
+                                if ($cust_val === '-' || empty($cust_val)) {
+                                    $c_id = getTxVal($tx, ['customer_id', 'cust_id'], [], null);
+                                    if (!$c_id) {
+                                        foreach ($tx as $k => $v) {
+                                            if (strpos(strtolower($k), 'cust') !== false && strpos(strtolower($k), 'id') !== false && is_numeric($v)) {
+                                                $c_id = (int)$v;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if ($c_id && is_numeric($c_id)) {
+                                        foreach ($customers_data as $cd) {
+                                            if ($cd['id'] == $c_id) {
+                                                $cust_val = $cd['name'];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                $pk_val = $tx[$pk_col] ?? 0;
+                            ?>
                             <tr>
-                                <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transactions recorded yet.</td>
+                                <td><strong><?php echo htmlspecialchars($code_val); ?></strong></td>
+                                <td><?php echo htmlspecialchars($date_val); ?></td>
+                                <td><?php echo htmlspecialchars($qty_val); ?></td>
+                                <td>
+                                    <span class="badge-type <?php echo (strtolower($type_val) === 'credit') ? 'credit' : ''; ?>">
+                                        <?php echo htmlspecialchars($type_val); ?>
+                                    </span>
+                                </td>
+                                <td><strong><?php echo htmlspecialchars($cust_val); ?></strong></td>
+                                <td><?php echo htmlspecialchars($desc_val); ?></td>
+                                <td><strong>₱<?php echo number_format($amt_val, 2); ?></strong></td>
+                                <td>
+                                    <a href="stockout.php?delete_id=<?php echo urlencode($pk_val); ?>" class="action-del" onclick="return confirm('Delete transaction record?')">Delete</a>
+                                </td>
                             </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction records found.</td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
 
     </div>
 
     <script>
         const productsMap = <?php echo json_encode($products_map); ?>;
-        const customersMap = <?php echo json_encode($customers_map); ?>;
+        const customersData = <?php echo json_encode($customers_data); ?>;
         let cart = [];
 
         function toggleCustomerField() {
             const txType = document.getElementById('tx_type').value;
-            const custGroup = document.getElementById('customer_group');
-            const custInput = document.getElementById('customer_input');
-
-            if (txType === 'Credit' || txType === 'Payment') {
-                custGroup.style.display = 'block';
-                custInput.setAttribute('required', 'required');
+            const custInput = document.getElementById('customer_name');
+            if (txType === 'Cash') {
+                custInput.placeholder = "Optional for Cash sales";
             } else {
-                custGroup.style.display = 'none';
-                custInput.removeAttribute('required');
-                custInput.value = '';
-                document.getElementById('customer_id_val').value = '';
+                custInput.placeholder = "Select or type customer name...";
             }
         }
 
-        // Auto link customer id on typing
-        document.getElementById('customer_input').addEventListener('input', function() {
-            const val = this.value.trim().toLowerCase();
-            if (customersMap[val]) {
-                document.getElementById('customer_id_val').value = customersMap[val];
+        function syncCustomerId() {
+            const inputVal = document.getElementById('customer_name').value.trim();
+            const val = inputVal.toLowerCase();
+            const hiddenId = document.getElementById('customer_id_val');
+            hiddenId.value = '';
+
+            const option = document.querySelector(`#customer_list option[value="${inputVal.replace(/"/g, '\\"')}"]`);
+            if (option && option.dataset.id) {
+                hiddenId.value = option.dataset.id;
             } else {
-                document.getElementById('customer_id_val').value = '';
+                const match = customersData.find(c => c.name.toLowerCase() === val);
+                if (match && match.id) {
+                    hiddenId.value = match.id;
+                }
             }
-        });
+        }
 
-        // Add scanned product to cart
-        function addItemToCart() {
+        function addToCart() {
             const codeInput = document.getElementById('scan_code');
-            const qtyInput  = document.getElementById('scan_qty');
+            const qtyInput = document.getElementById('scan_qty');
+            
             const code = codeInput.value.trim();
-            const qty  = parseInt(qtyInput.value) || 1;
+            const qty = parseInt(qtyInput.value) || 1;
 
-            if (!code) {
-                alert('Please enter or scan a barcode/code.');
-                codeInput.focus();
-                return;
-            }
+            if (!code) return;
 
-            let item = productsMap[code];
-            if (!item) {
-                item = {
+            let prod = productsMap[code];
+            if (!prod) {
+                prod = {
                     id: 0,
                     code: code,
-                    name: 'Product (' + code + ')',
+                    name: "Item " + code,
                     price: 0.00,
                     buy_price: 0.00
                 };
             }
 
-            const existingIndex = cart.findIndex(c => c.code === code);
+            const existingIndex = cart.findIndex(i => i.code === code);
             if (existingIndex > -1) {
                 cart[existingIndex].qty += qty;
             } else {
                 cart.push({
-                    id: item.id || 0,
-                    code: item.code || code,
-                    name: item.name || 'Product Item',
-                    price: parseFloat(item.price) || 0.00,
-                    buy_price: parseFloat(item.buy_price) || 0.00,
+                    id: prod.id,
+                    code: prod.code,
+                    name: prod.name,
+                    price: prod.price,
+                    buy_price: prod.buy_price,
                     qty: qty
                 });
             }
 
-            renderCart();
             codeInput.value = '';
-            qtyInput.value = 1;
+            qtyInput.value = '1';
             codeInput.focus();
+            renderCart();
         }
 
-        // Render Cart UI
-        function renderCart() {
-            const tbody = document.getElementById('cartTableBody');
-            const totalDisplay = document.getElementById('cartTotalDisplay');
-            const payloadInput = document.getElementById('items_payload');
-
-            if (cart.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">No items scanned yet.</td></tr>';
-                totalDisplay.innerText = '₱0.00';
-                payloadInput.value = '[]';
-                return;
-            }
-
-            let total = 0;
-            tbody.innerHTML = '';
-
-            cart.forEach((item, index) => {
-                const subtotal = item.qty * item.price;
-                total += subtotal;
-
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>
-                        <div style="font-weight: 600;">${item.name}</div>
-                        <div style="font-size: 10px; color: #64748b;">${item.code}</div>
-                    </td>
-                    <td style="text-align: center;">${item.qty}</td>
-                    <td style="text-align: right;">₱${item.price.toFixed(2)}</td>
-                    <td style="text-align: right; font-weight: 700;">₱${subtotal.toFixed(2)}</td>
-                    <td style="text-align: center;">
-                        <button type="button" class="cart-delete-btn" onclick="removeItem(${index})">&times;</button>
-                    </td>
-                `;
-                tbody.appendChild(tr);
-            });
-
-            totalDisplay.innerText = '₱' + total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            payloadInput.value = JSON.stringify(cart);
-        }
-
-        function removeItem(index) {
+        function removeFromCart(index) {
             cart.splice(index, 1);
             renderCart();
         }
 
-        // Handle Enter key inside scan input
-        document.getElementById('scan_code').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                addItemToCart();
-            }
-        });
+        function renderCart() {
+            const tbody = document.getElementById('cartTableBody');
+            const payloadInput = document.getElementById('items_payload');
+            const totalDisplay = document.getElementById('cartTotalDisplay');
 
-        // Form Submit Validation
-        document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            tbody.innerHTML = '';
+            let grandTotal = 0;
+
             if (cart.length === 0) {
-                e.preventDefault();
-                alert('Please add at least one item to the transaction before processing.');
+                tbody.innerHTML = '<tr id="emptyCartRow"><td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td></tr>';
+                totalDisplay.textContent = '₱0.00';
+                payloadInput.value = '[]';
                 return;
             }
 
-            const txType = document.getElementById('tx_type').value;
-            const custInput = document.getElementById('customer_input');
-            if ((txType === 'Credit' || txType === 'Payment') && !custInput.value.trim()) {
+            cart.forEach((item, index) => {
+                const subtotal = item.qty * item.price;
+                grandTotal += subtotal;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${item.name}</strong><br><small style="color: #64748b;">${item.code}</small></td>
+                    <td>${item.qty}</td>
+                    <td>₱${item.price.toFixed(2)}</td>
+                    <td><strong>₱${subtotal.toFixed(2)}</strong></td>
+                    <td><button type="button" class="cart-delete-btn" onclick="removeFromCart(${index})">&times;</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            totalDisplay.textContent = `₱${grandTotal.toFixed(2)}`;
+            payloadInput.value = JSON.stringify(cart);
+        }
+
+        document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            if (cart.length === 0) {
                 e.preventDefault();
-                alert('Please enter or select a customer name for Credit/Payment transactions.');
-                custInput.focus();
+                alert('Please scan or add at least one product to the cart before processing.');
+                return;
+            }
+            const txType = document.getElementById('tx_type').value;
+            const custName = document.getElementById('customer_name').value.trim();
+            if ((txType === 'Credit' || txType === 'Payment') && !custName) {
+                e.preventDefault();
+                alert('Please enter or select a Customer Name for Credit/Payment transactions.');
+                document.getElementById('customer_name').focus();
             }
         });
-
-        // History Log Table Search Filter
-        document.getElementById('historySearch').addEventListener('input', function() {
-            const filter = this.value.toLowerCase();
-            const rows = document.querySelectorAll('#historyTableBody tr');
-            rows.forEach(row => {
-                const text = row.innerText.toLowerCase();
-                row.style.display = text.includes(filter) ? '' : 'none';
-            });
-        });
-
-        // Initial setup on load
-        toggleCustomerField();
     </script>
 </body>
 </html>
