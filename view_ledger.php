@@ -55,37 +55,28 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Fetch Customer Name reliably matching Supabase 'customer_name' column
+// Direct lookup para makuha ang tamang customer_name mula sa Supabase table
 $customer_name = '';
 try {
-    $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
-    $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
-    $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
-    if ($c_data) {
-        $possible_name_columns = ['customer_name', 'name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer', 'store_name'];
-        foreach ($possible_name_columns as $col) {
-            if (isset($c_data[$col]) && trim((string)$c_data[$col]) !== '' && trim((string)$c_data[$col]) !== '-') {
-                $customer_name = trim($c_data[$col]);
-                break;
-            }
+    $stmt_name = $pdo->prepare("SELECT customer_name FROM customers WHERE id = ? OR customer_id = ? LIMIT 1");
+    $stmt_name->execute([$customer_id, $customer_id]);
+    $row_name = $stmt_name->fetch(PDO::FETCH_ASSOC);
+    
+    if ($row_name && !empty($row_name['customer_name'])) {
+        $customer_name = trim($row_name['customer_name']);
+    } else {
+        // Fallback kung sakaling sa transactions table nakapangalan
+        $stmt_tname = $pdo->prepare("SELECT customer_name FROM transactions WHERE customer_id = ? OR id = ? LIMIT 1");
+        $stmt_tname->execute([$customer_id, $customer_id]);
+        $row_tname = $stmt_tname->fetch(PDO::FETCH_ASSOC);
+        if ($row_tname && !empty($row_tname['customer_name'])) {
+            $customer_name = trim($row_tname['customer_name']);
         }
     }
 } catch (Exception $e) {}
 
-// Kung wala sa customers table, tingnan sa transactions table
-if (empty($customer_name)) {
-    try {
-        $t_name_stmt = $pdo->prepare("SELECT customer_name FROM transactions WHERE customer_id = ? OR id = ? LIMIT 1");
-        $t_name_stmt->execute([$customer_id, $customer_id]);
-        $t_row = $t_name_stmt->fetch(PDO::FETCH_ASSOC);
-        if ($t_row && !empty($t_row['customer_name'])) {
-            $customer_name = trim($t_row['customer_name']);
-        }
-    } catch (Exception $e) {}
-}
-
 // Huling fallback kung talagang blangko
-if (empty($customer_name) || $customer_name === '-') {
+if (empty($customer_name)) {
     $customer_name = 'Customer #' . $customer_id;
 }
 
