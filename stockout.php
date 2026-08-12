@@ -959,7 +959,7 @@ try {
 <div class="main-container">
     <!-- Left Panel: POS / New Transaction Form -->
     <div class="panel-card">
-    <h2 class="panel-title">Recent Transactions</h2>
+    <h2 class="panel-title">Input Transactions</h2>
         <form method="POST" action="stockout.php" id="txForm">
             <input type="hidden" name="process_batch_transaction" value="1">
             <input type="hidden" name="items_payload" id="items_payload" value="[]">
