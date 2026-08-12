@@ -62,13 +62,12 @@ try {
     $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
-        // Broad search for any column containing 'name' or 'customer'
         $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer'], ['name', 'cust'], '');
     }
 } catch (Exception $e) {}
 
 if (empty($customer_name) || $customer_name === '-') {
-    $customer_name = 'Abug, Milecha'; // Fallback match for your credit list view
+    $customer_name = 'Abug, Milecha'; 
 }
 
 // Product map lookup
@@ -99,7 +98,7 @@ $total_credit = 0;
 $total_payment = 0;
 
 try {
-    $all_tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY 1 DESC");
+    $all_tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY id ASC");
     $all_tx = $all_tx_stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $search_name = strtolower(trim($customer_name));
@@ -126,8 +125,6 @@ try {
         }
 
         if ($match) {
-            $transactions[] = $tx;
-
             $type = strtolower(getLedgerVal($tx, $type_candidates, $type_keywords, ''));
             $amt  = (float)getLedgerVal($tx, $amt_candidates, $amt_keywords, 0);
 
@@ -136,6 +133,8 @@ try {
             } elseif (in_array($type, ['payment', 'partial payment', 'full payment', 'cash'])) {
                 $total_payment += $amt;
             }
+
+            $transactions[] = $tx;
         }
     }
 } catch (Exception $e) {}
@@ -333,7 +332,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
         <div class="amount">₱<?= number_format($total_payment, 2) ?></div>
     </div>
     <div class="stat-card red">
-        <div class="title">Remaining Balance</div>
+        <div class="title">Remaining Balance Record</div>
         <div class="amount">₱<?= number_format($remaining_balance, 2) ?></div>
     </div>
 </div>
@@ -350,20 +349,42 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
                     <th>Item / Description</th>
                     <th>Qty</th>
                     <th>Amount</th>
+                    <th>Balance</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($transactions)): ?>
                     <tr>
-                        <td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction history found for this customer.</td>
+                        <td colspan="6" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction history found for this customer.</td>
                     </tr>
-                <?php else: ?>
-                    <?php foreach ($transactions as $tx): 
+                <?php else: 
+                    // Calculate running balance chronologically and display latest first
+                    $running_balance = 0;
+                    $calculated_rows = [];
+                    foreach ($transactions as $tx) {
+                        $t_type = strtolower(getLedgerVal($tx, $type_candidates, $type_keywords, 'credit'));
+                        $t_amt  = (float)getLedgerVal($tx, $amt_candidates, $amt_keywords, 0);
+
+                        if ($t_type === 'credit') {
+                            $running_balance += $t_amt;
+                        } elseif (in_array($t_type, ['payment', 'partial payment', 'full payment', 'cash'])) {
+                            $running_balance -= $t_amt;
+                        }
+                        
+                        $tx['running_balance'] = $running_balance;
+                        mw:
+                        $calculated_rows[] = $tx;
+                    }
+                    // Reverse to show newest transactions at the top
+                    $calculated_rows = array_reverse($calculated_rows);
+                ?>
+                    <?php foreach ($calculated_rows as $tx): 
                         $t_date = getLedgerVal($tx, $date_candidates, $date_keywords, '-');
                         $t_type = getLedgerVal($tx, $type_candidates, $type_keywords, 'Credit');
                         $t_desc = resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords);
                         $t_qty  = getLedgerVal($tx, $qty_candidates, $qty_keywords, 1);
                         $t_amt  = getLedgerVal($tx, $amt_candidates, $amt_keywords, 0);
+                        $t_bal  = $tx['running_balance'];
 
                         $t_type_lower = strtolower($t_type);
                         if ($t_type_lower === 'credit') {
@@ -381,7 +402,8 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
                             <td><span class="badge <?= $badge_cls ?>"><?= htmlspecialchars($t_type) ?></span></td>
                             <td><?= htmlspecialchars($t_desc) ?></td>
                             <td><?= htmlspecialchars($t_qty) ?></td>
-                            <td><strong>₱<?= number_format((float)$t_amt, 2) ?></strong></td>
+                            <td>₱<?= number_format((float)$t_amt, 2) ?></td>
+                            <td><strong>₱<?= number_format((float)$t_bal, 2) ?></strong></td>
                         </tr>
                     <?php endforeach; ?>
                 <?php endif; ?>
