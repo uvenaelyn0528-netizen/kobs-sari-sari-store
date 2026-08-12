@@ -42,6 +42,31 @@ function getTxVal($row, $candidates, $keywords = [], $default = '-') {
     return $default;
 }
 
+// Column candidate field maps
+$code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
+$code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
+
+$id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
+$id_keywords     = ['product_id', 'item_id'];
+
+$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name', 'item'];
+$desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_name', 'product_desc', 'name', 'detail'];
+
+$cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
+$cust_keywords   = ['cust', 'client', 'buyer'];
+
+$type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type', 'payment_method', 'method', 'trans_mode', 'trx_type', 'trx_mode', 'kind', 'action', 'entry_type', 'stock_type'];
+$type_keywords   = ['type', 'mode', 'pay', 'method', 'kind', 'trx'];
+
+$qty_candidates  = ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count'];
+$qty_keywords    = ['qty', 'quant', 'count'];
+
+$date_candidates = ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date'];
+$date_keywords   = ['date', 'time', 'created'];
+
+$amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val', 'price_total'];
+$amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
+
 // 1. Inspect 'transactions' table columns & data types
 $tx_columns = [];
 $tx_col_types = [];
@@ -100,31 +125,6 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     }
     return null;
 }
-
-// Column candidate field maps
-$code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
-$code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
-
-$id_candidates   = ['product_id', 'item_id', 'prod_id', 'p_id'];
-$id_keywords     = ['product_id', 'item_id'];
-
-$desc_candidates = ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name'];
-$desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_name', 'product_desc', 'name'];
-
-$cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
-$cust_keywords   = ['cust', 'client', 'buyer'];
-
-$type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type', 'payment_method', 'method', 'trans_mode', 'trx_type', 'trx_mode', 'kind', 'action', 'entry_type', 'stock_type'];
-$type_keywords   = ['type', 'mode', 'pay', 'method', 'kind', 'trx'];
-
-$qty_candidates  = ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count'];
-$qty_keywords    = ['qty', 'quant', 'count'];
-
-$date_candidates = ['transaction_date', 'tx_date', 'date', 'created_at', 'datetime', 'timestamp', 'date_created', 'created_date'];
-$date_keywords   = ['date', 'time', 'created'];
-
-$amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val', 'price_total'];
-$amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
 $pk_col = $tx_columns[0] ?? 'id';
 
@@ -284,11 +284,79 @@ try {
     }
 } catch (Exception $e) {}
 
+// Resolvers for rendering Recent Transactions
+function resolveCustomerName($tx, $customers_data, $cust_candidates, $cust_keywords) {
+    $val = getTxVal($tx, $cust_candidates, $cust_keywords, null);
+    if ($val !== null && $val !== '-' && !is_numeric($val) && trim((string)$val) !== '') {
+        return $val;
+    }
+
+    $cid = null;
+    if (is_numeric($val) && (int)$val > 0) {
+        $cid = (int)$val;
+    } else {
+        foreach ($tx as $col => $cval) {
+            $clow = strtolower($col);
+            if ((strpos($clow, 'cust') !== false || strpos($clow, 'client') !== false) && is_numeric($cval) && (int)$cval > 0) {
+                $cid = (int)$cval;
+                break;
+            }
+        }
+    }
+
+    if ($cid) {
+        foreach ($customers_data as $cd) {
+            if ((int)$cd['id'] === $cid) {
+                return $cd['name'];
+            }
+        }
+    }
+
+    return '-';
+}
+
+function resolveItemDescription($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords) {
+    $val = getTxVal($tx, $desc_candidates, $desc_keywords, null);
+    if ($val !== null && $val !== '-' && !is_numeric($val) && trim((string)$val) !== '') {
+        return $val;
+    }
+
+    // Lookup by Product ID
+    $pid = null;
+    foreach ($tx as $col => $cval) {
+        $clow = strtolower($col);
+        if ((in_array($clow, ['product_id', 'item_id', 'prod_id', 'p_id']) || ($clow !== 'id' && strpos($clow, 'product') !== false && strpos($clow, 'id') !== false)) && is_numeric($cval) && (int)$cval > 0) {
+            $pid = (int)$cval;
+            break;
+        }
+    }
+    if ($pid && isset($products_by_id[$pid])) {
+        return $products_by_id[$pid]['name'];
+    }
+
+    // Lookup by Barcode/Code
+    foreach ($tx as $col => $cval) {
+        $clow = strtolower($col);
+        if ((strpos($clow, 'code') !== false || strpos($clow, 'bar') !== false || strpos($clow, 'sku') !== false) && !empty(trim((string)$cval)) && trim((string)$cval) !== '-') {
+            $pcode = trim((string)$cval);
+            if (isset($products_map[$pcode])) {
+                return $products_map[$pcode]['name'];
+            }
+        }
+    }
+
+    // Transaction type fallback for payment rows
+    $t_type = getTxVal($tx, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type'], ['type'], '');
+    if (in_array(strtolower($t_type), ['partial payment', 'full payment', 'payment'])) {
+        return 'Account Payment (' . ucwords($t_type) . ')';
+    }
+
+    return '-';
+}
+
 // Handle transaction submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
     $raw_tx_type = trim($_POST['tx_type'] ?? 'Cash');
-    
-    // Updated valid transaction choices
     $valid_tx_types = ['Cash', 'Credit', 'Partial Payment', 'Full Payment'];
     $tx_type = in_array($raw_tx_type, $valid_tx_types) ? $raw_tx_type : 'Cash';
 
@@ -296,7 +364,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
     $selected_cust_id = !empty($_POST['customer_id_val']) ? (int)$_POST['customer_id_val'] : null;
     $tx_date = $_POST['tx_date'] ?? $today;
 
-    // Handle Payment types
     if (in_array($tx_type, ['Partial Payment', 'Full Payment'])) {
         $pay_amt = (float)($_POST['payment_amount'] ?? 0);
         $items = [[
@@ -312,7 +379,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
         $items = json_decode($items_raw, true);
     }
 
-    // Customer Lookup / Auto-creation
     if (!empty($customer_name) && $customer_name !== '-') {
         $c_lower = strtolower($customer_name);
         if (isset($customers_map[$c_lower]) && $customers_map[$c_lower]) {
@@ -377,19 +443,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
 
                     $is_int_col = isIntColumn($col, $tx_col_types);
 
-                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id']) || ($is_int_col && (strpos($c, 'product') !== false || strpos($c, 'item') !== false) && strpos($c, 'code') === false)) {
+                    if (in_array($c, ['product_id', 'item_id', 'prod_id', 'p_id']) || ($is_int_col && (strpos($c, 'product') !== false || strpos($c, 'item') !== false) && strpos($c, 'code') === false && strpos($c, 'desc') === false && strpos($c, 'name') === false)) {
                         $insert_data[$col] = ($prod_id > 0) ? $prod_id : null;
                     }
-                    elseif (in_array($c, ['customer_id', 'cust_id', 'client_id']) || ($is_int_col && (strpos($c, 'cust') !== false || strpos($c, 'client') !== false))) {
+                    elseif (in_array($c, ['customer_id', 'cust_id', 'client_id']) || ($is_int_col && (strpos($c, 'cust') !== false || strpos($c, 'client') !== false) && strpos($c, 'name') === false)) {
                         $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                     }
                     elseif (in_array($c, ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean']) || (strpos($c, 'code') !== false && strpos($c, 'id') === false) || strpos($c, 'barcode') !== false) {
                         $insert_data[$col] = $barcode;
                     }
-                    elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name']) || (strpos($c, 'desc') !== false && strpos($c, 'id') === false)) {
+                    elseif (in_array($c, ['description', 'product_name', 'item_name', 'desc', 'details', 'particulars', 'remarks', 'title', 'item_desc', 'prod_name', 'product_desc', 'name', 'item']) || strpos($c, 'desc') !== false || strpos($c, 'particular') !== false || strpos($c, 'detail') !== false || strpos($c, 'remark') !== false) {
                         $insert_data[$col] = (string)$desc;
                     }
-                    elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || (strpos($c, 'cust') !== false && strpos($c, 'id') === false)) {
+                    elseif (in_array($c, ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer']) || strpos($c, 'cust') !== false || strpos($c, 'client') !== false || strpos($c, 'buyer') !== false) {
                         if ($is_int_col) {
                             $insert_data[$col] = ($selected_cust_id && $selected_cust_id > 0) ? $selected_cust_id : null;
                         } else {
@@ -479,7 +545,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                 }
                 $stmt->execute($binds);
 
-                // Deduct stock only for product sales (not for payments)
+                // Deduct stock only for product sales
                 if (!in_array($tx_type, ['Partial Payment', 'Full Payment']) && $prod_qty_col && $prod_code_col) {
                     $deductStmt = $pdo->prepare("
                         UPDATE products 
@@ -531,7 +597,6 @@ try {
         $stmt->execute([$today]);
         $cash_sales_today = (float)$stmt->fetchColumn();
 
-        // Calculate payments collected today
         $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND LOWER({$col_type}) IN ('full payment', 'partial payment', 'payment')");
         $stmt->execute([$today]);
         $payment_today = (float)$stmt->fetchColumn();
@@ -983,8 +1048,8 @@ try {
                             $tx_id   = $tx[$pk_col] ?? 0;
                             $t_date  = getTxVal($tx, $date_candidates, $date_keywords, '-');
                             $t_type  = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
-                            $t_cust  = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
-                            $t_desc  = getTxVal($tx, $desc_candidates, $desc_keywords, '-');
+                            $t_cust  = resolveCustomerName($tx, $customers_data, $cust_candidates, $cust_keywords);
+                            $t_desc  = resolveItemDescription($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords);
                             $t_qty   = getTxVal($tx, $qty_candidates, $qty_keywords, 1);
                             $t_price = getTxVal($tx, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
                             $t_amt   = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
