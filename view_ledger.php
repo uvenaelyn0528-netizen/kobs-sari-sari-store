@@ -8,11 +8,11 @@ require_once 'db.php';
 
 $customer_id = $_GET['customer_id'] ?? null;
 if (!$customer_id) {
-    header("Location: customers.php");
+    header("Location: stockout.php");
     exit();
 }
 
-// Flexible column extraction helpers
+// Flexible column value extractor
 function getLedgerVal($row, $candidates, $keywords = [], $default = '-') {
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
@@ -54,38 +54,11 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Detect transaction table columns
-$tx_columns = [];
-try {
-    $col_stmt = $pdo->query("SELECT column_name FROM information_schema.columns WHERE lower(table_name) = 'transactions' AND table_schema = 'public'");
-    $tx_columns = $col_stmt->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $e) {}
-
-function findLedgerColumn($candidates, $keywords, $tx_columns) {
-    foreach ($tx_columns as $col) {
-        $clow = strtolower($col);
-        foreach ($candidates as $cand) {
-            if ($clow === strtolower($cand)) return $col;
-        }
-    }
-    foreach ($tx_columns as $col) {
-        $clow = strtolower($col);
-        foreach ($keywords as $kw) {
-            if (strpos($clow, strtolower($kw)) !== false) return $col;
-        }
-    }
-    return null;
-}
-
-$col_amt  = findLedgerColumn($amt_candidates, $amt_keywords, $tx_columns);
-$col_type = findLedgerColumn($type_candidates, $type_keywords, $tx_columns);
-$col_cust_id = findLedgerColumn(['customer_id', 'cust_id', 'client_id'], ['cust', 'client'], $tx_columns);
-
-// Detect customer details
+// Detect customer details from customers table
 $customer_name = 'Customer Ledger';
 try {
-    $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE id = ? OR customer_id = ? LIMIT 1");
-    $c_stmt->execute([$customer_id, $customer_id]);
+    $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE id::text = ? OR customer_id::text = ? LIMIT 1");
+    $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
         $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'full_name', 'cust_name'], ['name'], 'Customer #' . $customer_id);
@@ -114,21 +87,19 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch Customer Transactions
+// Fetch Customer Transactions flexibly
 $transactions = [];
 $total_credit = 0;
 $total_payment = 0;
 
 try {
-    // Construct query matching by customer_id or customer_name
-    if ($col_cust_id) {
-        $tx_stmt = $pdo->prepare("SELECT * FROM transactions WHERE {$col_cust_id} = ? OR LOWER(customer_name) = LOWER(?) ORDER BY 1 DESC");
-        $tx_stmt->execute([$customer_id, $customer_name]);
-    } else {
-        $tx_stmt = $pdo->prepare("SELECT * FROM transactions WHERE LOWER(customer_name) = LOWER(?) ORDER BY 1 DESC");
-        $tx_stmt->execute([$customer_name]);
-    }
-    
+    $tx_stmt = $pdo->prepare("
+        SELECT * FROM transactions 
+        WHERE customer_id::text = ? 
+           OR LOWER(customer_name) = LOWER(?) 
+        ORDER BY id DESC
+    ");
+    $tx_stmt->execute([(string)$customer_id, $customer_name]);
     $transactions = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Calculate totals including Partial and Full Payment types
@@ -138,7 +109,7 @@ try {
 
         if ($type === 'credit') {
             $total_credit += $amt;
-        } elseif (in_array($type, ['payment', 'partial payment', 'full payment'])) {
+        } elseif (in_array($type, ['payment', 'partial payment', 'full payment', 'cash'])) {
             $total_payment += $amt;
         }
     }
@@ -148,14 +119,13 @@ try {
 
 $remaining_balance = $total_credit - $total_payment;
 
-// Helper to resolve transaction description in ledger
+// Helper to resolve item description
 function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords) {
     $val = getLedgerVal($tx, $desc_candidates, $desc_keywords, null);
     if ($val !== null && $val !== '-' && !is_numeric($val) && trim((string)$val) !== '') {
         return $val;
     }
 
-    // Product ID Lookup
     foreach ($tx as $col => $cval) {
         $clow = strtolower($col);
         if ((in_array($clow, ['product_id', 'item_id', 'prod_id', 'p_id']) || (strpos($clow, 'product') !== false && strpos($clow, 'id') !== false)) && is_numeric($cval) && (int)$cval > 0) {
@@ -164,7 +134,6 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
         }
     }
 
-    // Code/Barcode Lookup
     foreach ($tx as $col => $cval) {
         $clow = strtolower($col);
         if ((strpos($clow, 'code') !== false || strpos($clow, 'bar') !== false || strpos($clow, 'sku') !== false) && !empty(trim((string)$cval)) && trim((string)$cval) !== '-') {
@@ -173,7 +142,6 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
         }
     }
 
-    // Fallback for payment types
     $t_type = strtolower(getLedgerVal($tx, ['transaction_type', 'type', 'tx_type', 'payment_type'], ['type'], ''));
     if (in_array($t_type, ['payment', 'partial payment', 'full payment'])) {
         return 'Account Payment (' . ucwords($t_type) . ')';
@@ -325,7 +293,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
 <body>
 
 <div class="back-btn-container">
-    <a href="credit.php" class="back-btn">&larr; Back to Credit list</a>
+    <a href="stockout.php" class="back-btn">&larr; Back to Dashboard</a>
 </div>
 
 <h1 class="header-title"><?= htmlspecialchars($customer_name) ?></h1>
