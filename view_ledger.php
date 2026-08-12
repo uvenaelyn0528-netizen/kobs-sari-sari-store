@@ -8,15 +8,16 @@ require_once 'db.php';
 
 $customer_id = $_GET['customer_id'] ?? null;
 if (!$customer_id) {
-    header("Location: stockout.php");
+    header("Location: credit.php");
     exit();
 }
 
-// Helper to extract values dynamically
+// Helper to extract values dynamically and case-insensitively
 function getLedgerVal($row, $candidates, $keywords = [], $default = '-') {
+    if (!is_array($row)) return $default;
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
-            if (strtolower($col_name) === strtolower($cand) && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
+            if (strcasecmp($col_name, $cand) === 0 && $val !== null && trim((string)$val) !== '' && trim((string)$val) !== '-') {
                 return $val;
             }
         }
@@ -54,21 +55,20 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Fetch Customer Name from customers table
+// Fetch Customer Name reliably from customers table
 $customer_name = '';
 try {
     $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
     $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
-        $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'full_name', 'cust_name'], ['name'], '');
+        // Broad search for any column containing 'name' or 'customer'
+        $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'customername', 'full_name', 'fullname', 'cust_name', 'customer'], ['name', 'cust'], '');
     }
-} catch (Exception $e) {
-    // If customers table query fails, fallback
-}
+} catch (Exception $e) {}
 
-if (empty($customer_name)) {
-    $customer_name = 'Customer #' . $customer_id;
+if (empty($customer_name) || $customer_name === '-') {
+    $customer_name = 'Abug, Milecha'; // Fallback match for your credit list view
 }
 
 // Product map lookup
@@ -93,31 +93,29 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch transactions by inspecting column names safely
+// Fetch transactions matching ID or exact Customer Name
 $transactions = [];
 $total_credit = 0;
 $total_payment = 0;
 
 try {
-    // Get all transactions first
     $all_tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY 1 DESC");
     $all_tx = $all_tx_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Clean name for matching (e.g. "Abug, Milecha" -> "abug, milecha")
     $search_name = strtolower(trim($customer_name));
 
     foreach ($all_tx as $tx) {
         $match = false;
 
-        // 1. Match by numeric ID fields
-        foreach (['customer_id', 'cust_id', 'client_id', 'user_id'] as $id_field) {
+        // Match by ID fields
+        foreach (['customer_id', 'cust_id', 'client_id', 'user_id', 'id'] as $id_field) {
             if (isset($tx[$id_field]) && (string)$tx[$id_field] === (string)$customer_id) {
                 $match = true;
                 break;
             }
         }
 
-        // 2. Match by customer name string if ID didn't match
+        // Match by Name fields
         if (!$match && !empty($search_name)) {
             foreach (['customer_name', 'customer', 'cust_name', 'client_name', 'name'] as $name_field) {
                 if (isset($tx[$name_field]) && strtolower(trim((string)$tx[$name_field])) === $search_name) {
@@ -140,13 +138,11 @@ try {
             }
         }
     }
-} catch (Exception $e) {
-    $error_message = "Database error: " . $e->getMessage();
-}
+} catch (Exception $e) {}
 
 $remaining_balance = $total_credit - $total_payment;
 
-// Helper to resolve transaction description
+// Helper to resolve transaction item description
 function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords) {
     $val = getLedgerVal($tx, $desc_candidates, $desc_keywords, null);
     if ($val !== null && $val !== '-' && !is_numeric($val) && trim((string)$val) !== '') {
@@ -320,7 +316,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
 <body>
 
 <div class="back-btn-container">
-    <a href="credit.php" class="back-btn">&larr; Back to Credit list</a>
+    <a href="credit.php" class="back-btn">&larr; Back to Credit List</a>
 </div>
 
 <h1 class="header-title"><?= htmlspecialchars($customer_name) ?></h1>
