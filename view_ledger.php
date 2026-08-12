@@ -12,7 +12,7 @@ if (!$customer_id) {
     exit();
 }
 
-// Flexible column value extractor
+// Helper to extract values dynamically
 function getLedgerVal($row, $candidates, $keywords = [], $default = '-') {
     foreach ($candidates as $cand) {
         foreach ($row as $col_name => $val) {
@@ -35,7 +35,7 @@ function getLedgerVal($row, $candidates, $keywords = [], $default = '-') {
     return $default;
 }
 
-// Column candidates definition
+// Candidates definition
 $code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code'];
 $code_keywords   = ['code', 'bar', 'sku'];
 
@@ -54,18 +54,24 @@ $date_keywords   = ['date', 'time', 'created'];
 $amt_candidates  = ['amount', 'price', 'retail_price', 'subtotal', 'total', 'grand_total', 'cost', 'val'];
 $amt_keywords    = ['amount', 'price', 'subtotal', 'total'];
 
-// Detect customer details from customers table
-$customer_name = 'Customer Ledger';
+// Fetch Customer Name from customers table
+$customer_name = '';
 try {
-    $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE id::text = ? OR customer_id::text = ? LIMIT 1");
+    $c_stmt = $pdo->prepare("SELECT * FROM customers WHERE CAST(id AS TEXT) = ? OR CAST(customer_id AS TEXT) = ? LIMIT 1");
     $c_stmt->execute([(string)$customer_id, (string)$customer_id]);
     $c_data = $c_stmt->fetch(PDO::FETCH_ASSOC);
     if ($c_data) {
-        $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'full_name', 'cust_name'], ['name'], 'Customer #' . $customer_id);
+        $customer_name = getLedgerVal($c_data, ['name', 'customer_name', 'full_name', 'cust_name'], ['name'], '');
     }
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    // If customers table query fails, fallback
+}
 
-// Fetch product lookup map
+if (empty($customer_name)) {
+    $customer_name = 'Customer #' . $customer_id;
+}
+
+// Product map lookup
 $products_map = [];
 $products_by_id = [];
 try {
@@ -87,39 +93,60 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch Customer Transactions flexibly
+// Fetch transactions by inspecting column names safely
 $transactions = [];
 $total_credit = 0;
 $total_payment = 0;
 
 try {
-    $tx_stmt = $pdo->prepare("
-        SELECT * FROM transactions 
-        WHERE customer_id::text = ? 
-           OR LOWER(customer_name) = LOWER(?) 
-        ORDER BY id DESC
-    ");
-    $tx_stmt->execute([(string)$customer_id, $customer_name]);
-    $transactions = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Get all transactions first
+    $all_tx_stmt = $pdo->query("SELECT * FROM transactions ORDER BY 1 DESC");
+    $all_tx = $all_tx_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Calculate totals including Partial and Full Payment types
-    foreach ($transactions as $tx) {
-        $type = strtolower(getLedgerVal($tx, $type_candidates, $type_keywords, ''));
-        $amt  = (float)getLedgerVal($tx, $amt_candidates, $amt_keywords, 0);
+    // Clean name for matching (e.g. "Abug, Milecha" -> "abug, milecha")
+    $search_name = strtolower(trim($customer_name));
 
-        if ($type === 'credit') {
-            $total_credit += $amt;
-        } elseif (in_array($type, ['payment', 'partial payment', 'full payment', 'cash'])) {
-            $total_payment += $amt;
+    foreach ($all_tx as $tx) {
+        $match = false;
+
+        // 1. Match by numeric ID fields
+        foreach (['customer_id', 'cust_id', 'client_id', 'user_id'] as $id_field) {
+            if (isset($tx[$id_field]) && (string)$tx[$id_field] === (string)$customer_id) {
+                $match = true;
+                break;
+            }
+        }
+
+        // 2. Match by customer name string if ID didn't match
+        if (!$match && !empty($search_name)) {
+            foreach (['customer_name', 'customer', 'cust_name', 'client_name', 'name'] as $name_field) {
+                if (isset($tx[$name_field]) && strtolower(trim((string)$tx[$name_field])) === $search_name) {
+                    $match = true;
+                    break;
+                }
+            }
+        }
+
+        if ($match) {
+            $transactions[] = $tx;
+
+            $type = strtolower(getLedgerVal($tx, $type_candidates, $type_keywords, ''));
+            $amt  = (float)getLedgerVal($tx, $amt_candidates, $amt_keywords, 0);
+
+            if ($type === 'credit') {
+                $total_credit += $amt;
+            } elseif (in_array($type, ['payment', 'partial payment', 'full payment', 'cash'])) {
+                $total_payment += $amt;
+            }
         }
     }
 } catch (Exception $e) {
-    $error_message = "Error fetching ledger data: " . $e->getMessage();
+    $error_message = "Database error: " . $e->getMessage();
 }
 
 $remaining_balance = $total_credit - $total_payment;
 
-// Helper to resolve item description
+// Helper to resolve transaction description
 function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candidates, $desc_keywords) {
     $val = getLedgerVal($tx, $desc_candidates, $desc_keywords, null);
     if ($val !== null && $val !== '-' && !is_numeric($val) && trim((string)$val) !== '') {
@@ -293,7 +320,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
 <body>
 
 <div class="back-btn-container">
-    <a href="Credit.php" class="back-btn">&larr; Back to Credit List</a>
+    <a href="credit.php" class="back-btn">&larr; Back to Credit list</a>
 </div>
 
 <h1 class="header-title"><?= htmlspecialchars($customer_name) ?></h1>
