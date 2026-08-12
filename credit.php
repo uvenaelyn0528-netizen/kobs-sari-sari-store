@@ -1,39 +1,46 @@
 <?php
 require_once 'db.php'; 
 
-// Auto-detect transaction type column name from PostgreSQL table metadata
-$typeCol = 'type';
+// 1. Inspect table columns directly from PostgreSQL metadata
+$typeCol = 'transaction_type'; // Default fallback
 try {
-    $metaStmt = $pdo->query("SELECT * FROM transactions LIMIT 0");
-    for ($i = 0; $i < $metaStmt->columnCount(); $i++) {
-        $meta = $metaStmt->getColumnMeta($i);
-        $colName = strtolower($meta['name']);
-        if (in_array($colName, ['transaction_type', 'type', 'trans_type', 'transtype'])) {
-            $typeCol = $meta['name'];
+    $stmt = $pdo->query("SELECT * FROM transactions LIMIT 0");
+    for ($i = 0; $i < $stmt->columnCount(); $i++) {
+        $meta = $stmt->getColumnMeta($i);
+        $colName = $meta['name'];
+        if (in_array(strtolower($colName), ['type', 'transaction_type', 'trans_type', 'payment_type'])) {
+            $typeCol = $colName;
             break;
         }
     }
 } catch (Exception $e) {
-    $typeCol = 'transaction_type';
+    // Keeps fallback 'transaction_type' if table inspection fails
 }
 
-// Safely format column identifier for PostgreSQL
+// Escape column identifier for PostgreSQL queries
 $typeColSql = '"' . str_replace('"', '""', $typeCol) . '"';
 
-// Fetch summary card totals
+// 2. Fetch summary metric card totals
 $summaryQuery = "
     SELECT 
         COALESCE(SUM(CASE WHEN {$typeColSql} = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
         COALESCE(SUM(CASE WHEN {$typeColSql} = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
     FROM transactions
 ";
-$summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
+
+try {
+    $summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    die("<div style='padding:20px; background:#fee2e2; color:#991b1b; font-family:sans-serif;'>
+            <strong>Database Error:</strong> " . htmlspecialchars($e->getMessage()) . "
+         </div>");
+}
 
 $totalStoreCredit = $summary['total_store_credit'] ?? 0;
 $totalPayment = $summary['total_payment'] ?? 0;
 $totalBalance = $totalStoreCredit - $totalPayment;
 
-// Fetch customer ledger balances grouped by customer_id
+// 3. Fetch customer credit ledger balances aggregated by customer_id
 $ledgerQuery = "
     SELECT 
         c.id AS customer_id,
