@@ -28,10 +28,36 @@ try {
         $customerName = $custData['name'];
     }
 } catch (Exception $e) {
-    // Fallback name remains
+    // Fallback name
 }
 
-// 2. Fetch Customer Transactions
+// 2. Detect Item Description column dynamically from transactions table
+$itemExpr = "''";
+try {
+    $sampleTx = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if ($sampleTx !== false) {
+        $txCols = array_map('strtolower', array_keys($sampleTx));
+        if (in_array('item_name', $txCols)) {
+            $itemExpr = 't."item_name"';
+        } elseif (in_array('description', $txCols)) {
+            $itemExpr = 't."description"';
+        } elseif (in_array('product_name', $txCols)) {
+            $itemExpr = 't."product_name"';
+        } elseif (in_array('item_description', $txCols)) {
+            $itemExpr = 't."item_description"';
+        } elseif (in_array('details', $txCols)) {
+            $itemExpr = 't."details"';
+        } elseif (in_array('particulars', $txCols)) {
+            $itemExpr = 't."particulars"';
+        } elseif (in_array('item', $txCols)) {
+            $itemExpr = 't."item"';
+        }
+    }
+} catch (Exception $e) {
+    $itemExpr = "''";
+}
+
+// 3. Fetch Customer Transactions
 $transactions = [];
 $totalCredit = 0;
 $totalPayment = 0;
@@ -39,15 +65,16 @@ $totalPayment = 0;
 try {
     $txStmt = $pdo->prepare("
         SELECT 
-            id,
-            transaction_date,
-            payment_type,
-            total_amount,
-            qty,
-            created_at
-        FROM transactions
-        WHERE customer_id = ?
-        ORDER BY created_at DESC, id DESC
+            t.id,
+            t.transaction_date,
+            t.payment_type,
+            t.total_amount,
+            t.qty,
+            t.created_at,
+            {$itemExpr} AS item_description
+        FROM transactions t
+        WHERE t.customer_id = ?
+        ORDER BY t.created_at DESC, t.id DESC
     ");
     $txStmt->execute([$customerId]);
     $transactions = $txStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -115,6 +142,7 @@ $balance = $totalCredit - $totalPayment;
                         <tr class="bg-amber-50 text-amber-900 text-xs font-bold uppercase tracking-wider">
                             <th class="p-3">Date</th>
                             <th class="p-3">Type</th>
+                            <th class="p-3">Item / Description</th>
                             <th class="p-3 text-center">Qty</th>
                             <th class="p-3 text-right">Amount</th>
                         </tr>
@@ -122,7 +150,7 @@ $balance = $totalCredit - $totalPayment;
                     <tbody class="divide-y divide-gray-100 text-sm">
                         <?php if (empty($transactions)): ?>
                             <tr>
-                                <td colspan="4" class="p-4 text-center text-gray-500">No transactions recorded for this customer.</td>
+                                <td colspan="5" class="p-4 text-center text-gray-500">No transactions recorded for this customer.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($transactions as $tx): ?>
@@ -136,6 +164,15 @@ $balance = $totalCredit - $totalPayment;
                                         <?php else: ?>
                                             <span class="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">Payment</span>
                                         <?php endif; ?>
+                                    </td>
+                                    <td class="p-3 text-gray-800 font-medium">
+                                        <?php 
+                                            $desc = !empty($tx['item_description']) ? $tx['item_description'] : '';
+                                            if (empty($desc)) {
+                                                $desc = (strcasecmp($tx['payment_type'], 'Payment') === 0) ? 'Payment Received' : '-';
+                                            }
+                                            echo htmlspecialchars($desc);
+                                        ?>
                                     </td>
                                     <td class="p-3 text-center text-gray-600"><?= (int)$tx['qty'] ?></td>
                                     <td class="p-3 text-right font-bold <?= strcasecmp($tx['payment_type'], 'Credit') === 0 ? 'text-blue-600' : 'text-emerald-600' ?>">
