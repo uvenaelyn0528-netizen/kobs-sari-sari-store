@@ -325,7 +325,7 @@ function resolveLedgerItemDesc($tx, $products_map, $products_by_id, $desc_candid
 <body>
 
 <div class="back-btn-container">
-    <a href="customers.php" class="back-btn">&larr; Back to Customers</a>
+    <a href="credit.php" class="back-btn">&larr; Back to Credit list</a>
 </div>
 
 <h1 class="header-title"><?= htmlspecialchars($customer_name) ?></h1>
