@@ -101,7 +101,7 @@ function findSingleColumn($candidates, $keywords, $tx_columns, $exclude_cols = [
     return null;
 }
 
-// Column candidate field maps
+// Comprehensive Column candidate field maps
 $code_candidates = ['product_code', 'code', 'barcode', 'item_code', 'pcode', 'prod_code', 'sku', 'bar_code', 'upc', 'ean'];
 $code_keywords   = ['code', 'bar', 'sku', 'upc', 'ean'];
 
@@ -114,8 +114,9 @@ $desc_keywords   = ['desc', 'particular', 'remark', 'title', 'item_desc', 'prod_
 $cust_candidates = ['customer_name', 'customer', 'client_name', 'client', 'cust_name', 'buyer_name', 'buyer'];
 $cust_keywords   = ['cust', 'client', 'buyer'];
 
-$type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type'];
-$type_keywords   = ['type', 'mode', 'pay'];
+// Expanded transaction type candidates to match any database schema variation
+$type_candidates = ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type', 'payment_method', 'method', 'trans_mode', 'trx_type', 'trx_mode', 'kind', 'action', 'entry_type', 'stock_type'];
+$type_keywords   = ['type', 'mode', 'pay', 'method', 'kind', 'trx'];
 
 $qty_candidates  = ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count'];
 $qty_keywords    = ['qty', 'quant', 'count'];
@@ -289,7 +290,11 @@ try {
 
 // --- HANDLE BATCH TRANSACTION SUBMISSION ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transaction'])) {
-    $tx_type = $_POST['tx_type'] ?? 'Cash';
+    // Strictly read transaction type from POST payload
+    $raw_tx_type = trim($_POST['tx_type'] ?? 'Cash');
+    $valid_tx_types = ['Cash', 'Credit', 'Payment'];
+    $tx_type = in_array($raw_tx_type, $valid_tx_types) ? $raw_tx_type : 'Cash';
+
     $customer_name = trim($_POST['customer_name'] ?? '');
     $selected_cust_id = !empty($_POST['customer_id_val']) ? (int)$_POST['customer_id_val'] : null;
     $tx_date = $_POST['tx_date'] ?? $today;
@@ -406,8 +411,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_batch_transac
                     elseif (in_array($c, ['qty', 'quantity', 'qty_sold', 'count', 'amount_qty', 'items_count']) || strpos($c, 'qty') !== false) {
                         $insert_data[$col] = $qty;
                     }
-                    // 8. Type
-                    elseif (in_array($c, ['transaction_type', 'type', 'tx_type', 'trans_type', 'payment_type', 'mode', 'payment_mode', 'status', 'pay_type']) || strpos($c, 'type') !== false) {
+                    // 8. Type / Mode / Method (Enhanced detection for all column naming variations)
+                    elseif (in_array($c, array_map('strtolower', $type_candidates)) || strpos($c, 'type') !== false || strpos($c, 'mode') !== false || strpos($c, 'method') !== false) {
                         $insert_data[$col] = $tx_type;
                     }
                     // 9. Amounts
@@ -534,17 +539,17 @@ $col_type = findSingleColumn($type_candidates, $type_keywords, $tx_columns);
 
 try {
     if ($col_amt && $col_date && $col_type) {
-        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND {$col_type} = 'Cash'");
+        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND LOWER({$col_type}) = 'cash'");
         $stmt->execute([$today]);
         $cash_sales_today = (float)$stmt->fetchColumn();
 
-        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND {$col_type} = 'Payment'");
+        $stmt = $pdo->prepare("SELECT SUM({$col_amt}) FROM transactions WHERE CAST({$col_date} AS DATE) = ? AND LOWER({$col_type}) = 'payment'");
         $stmt->execute([$today]);
         $payment_today = (float)$stmt->fetchColumn();
 
         $total_cash_today = $cash_sales_today + $payment_today;
 
-        $stmt = $pdo->query("SELECT SUM({$col_amt}) FROM transactions WHERE {$col_type} = 'Credit'");
+        $stmt = $pdo->query("SELECT SUM({$col_amt}) FROM transactions WHERE LOWER({$col_type}) = 'credit'");
         $total_credit = (float)$stmt->fetchColumn();
     }
 } catch (Exception $e) {}
@@ -795,454 +800,383 @@ try {
 
         .history-table td {
             padding: 10px 12px;
-            border-bottom: 1px solid #f1f5f9;
+            border-bottom: 1px solid var(--card-border);
+            vertical-align: middle;
         }
 
-        .badge-type {
-            background-color: #dcfce7;
-            color: #15803d;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
+        .badge {
             display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
         }
+        .badge.cash { background: #dcfce7; color: #15803d; }
+        .badge.credit { background: #ffedd5; color: #c2410c; }
+        .badge.payment { background: #dbeafe; color: #1e40af; }
 
-        .badge-type.credit {
-            background-color: #fee2e2;
-            color: #dc2626;
-        }
-
-        .badge-type.payment {
-            background-color: #e0f2fe;
-            color: #0369a1;
-        }
-
-        .action-del {
+        .btn-delete {
             color: #ef4444;
             text-decoration: none;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
+        }
+        .btn-delete:hover { text-decoration: underline; }
+
+        .alert-error {
+            background-color: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+
+        .alert-success {
+            background-color: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            color: #166534;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
         }
     </style>
 </head>
 <body>
 
-    <div class="back-btn-container">
-        <a href="store.php" class="back-to-store-btn">&larr; Back to Store</a>
+<div class="back-btn-container">
+    <a href="index.php" class="back-to-store-btn">&larr; Back to Dashboard</a>
+</div>
+
+<?php if (!empty($error_message)): ?>
+    <div class="alert-error"><?= htmlspecialchars($error_message) ?></div>
+<?php endif; ?>
+
+<?php if (isset($_GET['success'])): ?>
+    <div class="alert-success">Transaction recorded successfully!</div>
+<?php endif; ?>
+
+<!-- Dashboard Summary Stats -->
+<div class="stats-grid">
+    <div class="stat-card yellow">
+        <div class="title">Total Cash Today</div>
+        <div class="amount">₱<?= number_format($total_cash_today, 2) ?></div>
     </div>
-
-    <!-- ALERTS -->
-    <?php if (!empty($error_message)): ?>
-        <div style="background-color: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-weight: 600;">
-            ⚠️ <?php echo htmlspecialchars($error_message); ?>
-        </div>
-    <?php endif; ?>
-
-    <?php if (isset($_GET['success'])): ?>
-        <div style="background-color: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-weight: 600;">
-            ✅ Transaction processed successfully!
-        </div>
-    <?php endif; ?>
-
-    <!-- STAT CARDS -->
-    <div class="stats-grid">
-        <div class="stat-card yellow">
-            <div class="title">Total Cash On Hand (Today)</div>
-            <div class="amount">₱<?php echo number_format($total_cash_today, 2); ?></div>
-        </div>
-        <div class="stat-card green">
-            <div class="title">Payment For Today</div>
-            <div class="amount">₱<?php echo number_format($payment_today, 2); ?></div>
-        </div>
-        <div class="stat-card blue">
-            <div class="title">Cash Sales (Today)</div>
-            <div class="amount">₱<?php echo number_format($cash_sales_today, 2); ?></div>
-        </div>
-        <div class="stat-card orange">
-            <div class="title">Total Credit Accumulation</div>
-            <div class="amount">₱<?php echo number_format($total_credit, 2); ?></div>
-        </div>
+    <div class="stat-card green">
+        <div class="title">Cash Sales Today</div>
+        <div class="amount">₱<?= number_format($cash_sales_today, 2) ?></div>
     </div>
+    <div class="stat-card blue">
+        <div class="title">Payments Collected Today</div>
+        <div class="amount">₱<?= number_format($payment_today, 2) ?></div>
+    </div>
+    <div class="stat-card orange">
+        <div class="title">Total Credit Balance</div>
+        <div class="amount">₱<?= number_format($total_credit, 2) ?></div>
+    </div>
+</div>
 
-    <!-- MAIN WORKSPACE -->
-    <div class="main-container">
-        
-        <!-- TRANSACTION FORM -->
-        <div class="panel-card">
-            <h2 class="panel-title">Record Transaction</h2>
-            
-            <form id="transactionForm" method="POST" action="stockout.php">
-                <input type="hidden" name="process_batch_transaction" value="1">
-                <input type="hidden" name="items_payload" id="items_payload" value="[]">
-                <input type="hidden" name="customer_id_val" id="customer_id_val" value="">
+<div class="main-container">
+    <!-- Left Panel: POS / New Transaction Form -->
+    <div class="panel-card">
+        <h2 class="panel-title">New Transaction</h2>
+        <form method="POST" action="stockout.php" id="txForm">
+            <input type="hidden" name="process_batch_transaction" value="1">
+            <input type="hidden" name="items_payload" id="items_payload" value="[]">
+            <input type="hidden" name="customer_id_val" id="customer_id_val" value="">
 
-                <!-- Transaction Type -->
+            <div class="form-group">
+                <label for="tx_type">Transaction Type</label>
+                <select name="tx_type" id="tx_type" class="form-control" onchange="handleTxTypeChange()">
+                    <option value="Cash">Cash Sale</option>
+                    <option value="Credit">Credit / On Account</option>
+                    <option value="Payment">Account Payment</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="customer_section" style="display: none;">
+                <label for="customer_input">Customer Name</label>
+                <input type="text" id="customer_input" name="customer_name" class="form-control" list="customer_list" placeholder="Search or type customer name..." autocomplete="off">
+                <datalist id="customer_list">
+                    <?php foreach ($customers_data as $cust): ?>
+                        <option value="<?= htmlspecialchars($cust['name']) ?>"></option>
+                    <?php endforeach; ?>
+                </datalist>
+            </div>
+
+            <div class="form-group">
+                <label for="tx_date">Transaction Date</label>
+                <input type="date" name="tx_date" id="tx_date" class="form-control" value="<?= htmlspecialchars($today) ?>">
+            </div>
+
+            <!-- Payment Amount Section -->
+            <div id="payment_only_section" style="display: none;">
                 <div class="form-group">
-                   <label for="payment_type" class="block text-xs font-bold text-gray-700 mb-1">Transaction Type</label>
-<select name="payment_type" id="payment_type" class="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500">
-    <option value="Cash">Cash</option>
-    <option value="Credit">Credit</option>
-    <option value="Partial Payment">Partial Payment</option>
-    <option value="Full Payment">Full Payment</option>
-</select>
-                </div>
-
-                <!-- Customer Selection Field (Hidden for Cash) -->
-                <div class="form-group" id="customerGroup" style="display: none;">
-                    <label for="customer_name">Customer Name</label>
-                    <input type="text" name="customer_name" id="customer_name" class="form-control" list="customer_list" placeholder="Select or type customer name..." autocomplete="off" onchange="syncCustomerId()" oninput="syncCustomerId()">
-                    <datalist id="customer_list">
-                        <?php foreach ($customers_data as $cust): ?>
-                            <option data-id="<?php echo $cust['id']; ?>" value="<?php echo htmlspecialchars($cust['name']); ?>"></option>
-                        <?php endforeach; ?>
-                    </datalist>
-                </div>
-
-                <!-- Direct Payment Amount Field (Shown only for Payment) -->
-                <div class="form-group" id="paymentAmountGroup" style="display: none;">
                     <label for="payment_amount">Payment Amount (₱)</label>
-                    <input type="number" step="0.01" min="0.01" name="payment_amount" id="payment_amount" class="form-control" placeholder="0.00">
+                    <input type="number" step="0.01" min="0" name="payment_amount" id="payment_amount" class="form-control" placeholder="0.00">
                 </div>
+            </div>
 
-                <!-- Barcode & Item Scan Section (Shown for Cash & Credit) -->
-                <div id="productScanSection">
-                    <div class="form-group">
-                        <label>Product Barcode / Code</label>
-                        <div class="scan-row">
-                            <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code" autofocus onkeypress="if(event.key==='Enter'){event.preventDefault(); addToCart();}">
-                            <input type="number" id="scan_qty" class="form-control" value="1" min="1">
-                            <button type="button" class="add-btn" onclick="addToCart()">+</button>
-                        </div>
-                    </div>
-
-                    <!-- Scanned Cart Table -->
-                    <div class="cart-box">
-                        <table class="cart-table">
-                            <thead>
-                                <tr>
-                                    <th>Item / Code</th>
-                                    <th>Qty</th>
-                                    <th>Price</th>
-                                    <th>Subtotal</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="cartTableBody">
-                                <tr id="emptyCartRow">
-                                    <td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- Cart Total -->
-                    <div class="cart-summary">
-                        <span class="label">Total Amount:</span>
-                        <span class="total-value" id="cartTotalDisplay">₱0.00</span>
-                    </div>
-                </div>
-
-                <!-- Date -->
+            <!-- Items / POS Cart Section -->
+            <div id="items_section">
                 <div class="form-group">
-                    <label for="tx_date">Date</label>
-                    <input type="date" name="tx_date" id="tx_date" class="form-control" value="<?php echo $today; ?>">
+                    <label>Scan Barcode / Select Product</label>
+                    <div class="scan-row">
+                        <input type="text" id="scan_code" class="form-control" placeholder="Scan barcode or enter code..." list="product_list" autocomplete="off">
+                        <datalist id="product_list">
+                            <?php foreach ($products_map as $p_code => $p_info): ?>
+                                <option value="<?= htmlspecialchars($p_code) ?>"><?= htmlspecialchars($p_info['name']) ?> - ₱<?= number_format($p_info['price'], 2) ?></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                        <input type="number" id="scan_qty" class="form-control" value="1" min="1" placeholder="Qty">
+                        <button type="button" class="add-btn" onclick="addToCart()">+</button>
+                    </div>
                 </div>
 
-                <button type="submit" class="process-btn">Process Transaction</button>
-            </form>
-        </div>
+                <div class="cart-box">
+                    <table class="cart-table">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th style="width: 50px;">Qty</th>
+                                <th style="width: 70px;">Price</th>
+                                <th style="width: 70px;">Total</th>
+                                <th style="width: 30px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="cart_tbody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">Cart is empty</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
 
-        <!-- TRANSACTION HISTORY LOG -->
-        <div class="panel-card">
-            <h2 class="panel-title">Transaction History Log</h2>
+                <div class="cart-summary">
+                    <span class="label">Total Amount:</span>
+                    <span class="total-value" id="cart_total_display">₱0.00</span>
+                </div>
+            </div>
 
+            <button type="submit" class="process-btn" onclick="return validateAndSubmitForm()">Process Transaction</button>
+        </form>
+    </div>
+
+    <!-- Right Panel: Recent Transactions History -->
+    <div class="panel-card">
+        <h2 class="panel-title">Recent Transactions</h2>
+        <div style="overflow-x: auto;">
             <table class="history-table">
                 <thead>
                     <tr>
-                        <th>Code</th>
                         <th>Date</th>
-                        <th>Qty</th>
                         <th>Type</th>
-                        <th>Customer Name</th>
-                        <th>Description</th>
+                        <th>Customer</th>
+                        <th>Item / Particulars</th>
+                        <th>Qty</th>
+                        <th>Price</th>
                         <th>Amount</th>
-                        <th>Actions</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if (!empty($transactions)): ?>
-                        <?php foreach ($transactions as $tx): ?>
-                            <?php
-                                // 1. Retrieve raw column values from transaction record
-                                $code_val = getTxVal($tx, $code_candidates, $code_keywords, '-');
-                                $date_val = getTxVal($tx, $date_candidates, $date_keywords, '-');
-                                $qty_val  = getTxVal($tx, $qty_candidates, $qty_keywords, '1');
-                                $type_val = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
-                                $desc_val = getTxVal($tx, $desc_candidates, $desc_keywords, '-');
-                                $amt_val  = (float)getTxVal($tx, $amt_candidates, $amt_keywords, 0);
+                    <?php if (empty($transactions)): ?>
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transactions recorded yet.</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($transactions as $tx): 
+                            $tx_id   = $tx[$pk_col] ?? 0;
+                            $t_date  = getTxVal($tx, $date_candidates, $date_keywords, '-');
+                            $t_type  = getTxVal($tx, $type_candidates, $type_keywords, 'Cash');
+                            $t_cust  = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
+                            $t_desc  = getTxVal($tx, $desc_candidates, $desc_keywords, '-');
+                            $t_qty   = getTxVal($tx, $qty_candidates, $qty_keywords, 1);
+                            $t_price = getTxVal($tx, ['retail_price', 'selling_price', 'price', 'unit_price'], ['price'], 0);
+                            $t_amt   = getTxVal($tx, $amt_candidates, $amt_keywords, 0);
 
-                                // 2. Dynamic Product Code & Description Fallback via product_id / item_id FK
-                                $p_id = getTxVal($tx, ['product_id', 'item_id', 'prod_id', 'p_id'], [], null);
-                                if (!$p_id) {
-                                    foreach ($tx as $k => $v) {
-                                        if ((strpos(strtolower($k), 'product') !== false || strpos(strtolower($k), 'item') !== false) && strpos(strtolower($k), 'id') !== false && is_numeric($v)) {
-                                            $p_id = (int)$v;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if ($p_id && isset($products_by_id[$p_id])) {
-                                    if ($code_val === '-' || empty($code_val)) {
-                                        $code_val = $products_by_id[$p_id]['code'] ?? '-';
-                                    }
-                                    if ($desc_val === '-' || $desc_val === 'Item' || empty($desc_val)) {
-                                        $desc_val = $products_by_id[$p_id]['name'] ?? 'Item';
-                                    }
-                                }
-
-                                // 3. Dynamic Customer Name Resolution
-                                $cust_val = getTxVal($tx, $cust_candidates, $cust_keywords, '-');
-
-                                $c_id = null;
-                                if (is_numeric($cust_val) && (int)$cust_val > 0) {
-                                    $c_id = (int)$cust_val;
-                                    $cust_val = '-';
-                                } else {
-                                    $c_id = getTxVal($tx, ['customer_id', 'cust_id', 'client_id'], [], null);
-                                }
-
-                                if (!$c_id) {
-                                    foreach ($tx as $k => $v) {
-                                        $k_lower = strtolower($k);
-                                        if ((strpos($k_lower, 'cust') !== false || strpos($k_lower, 'client') !== false) && is_numeric($v) && (int)$v > 0) {
-                                            $c_id = (int)$v;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if ($c_id && is_numeric($c_id)) {
-                                    foreach ($customers_data as $cd) {
-                                        if ($cd['id'] == $c_id) {
-                                            $cust_val = $cd['name'];
-                                            break;
-                                        }
-                                    }
-                                    if ($cust_val === '-' || empty($cust_val)) {
-                                        try {
-                                            $qC = $pdo->prepare("SELECT {$cust_name_col} FROM customers WHERE {$cust_id_col} = ? LIMIT 1");
-                                            $qC->execute([$c_id]);
-                                            $fetched_name = $qC->fetchColumn();
-                                            if ($fetched_name) {
-                                                $cust_val = $fetched_name;
-                                            }
-                                        } catch (Exception $e) {}
-                                    }
-                                }
-
-                                $pk_val = $tx[$pk_col] ?? 0;
-                                $type_lower = strtolower($type_val);
-                            ?>
+                            $badge_cls = strtolower($t_type) === 'credit' ? 'credit' : (strtolower($t_type) === 'payment' ? 'payment' : 'cash');
+                        ?>
                             <tr>
-                                <td><strong><?php echo htmlspecialchars($code_val); ?></strong></td>
-                                <td><?php echo htmlspecialchars($date_val); ?></td>
-                                <td><?php echo htmlspecialchars($qty_val); ?></td>
+                                <td><?= htmlspecialchars(date('M d, Y', strtotime($t_date))) ?></td>
+                                <td><span class="badge <?= $badge_cls ?>"><?= htmlspecialchars($t_type) ?></span></td>
+                                <td><?= htmlspecialchars($t_cust) ?></td>
+                                <td><?= htmlspecialchars($t_desc) ?></td>
+                                <td><?= htmlspecialchars($t_qty) ?></td>
+                                <td>₱<?= number_format((float)$t_price, 2) ?></td>
+                                <td><strong>₱<?= number_format((float)$t_amt, 2) ?></strong></td>
                                 <td>
-                                    <span class="badge-type <?php echo ($type_lower === 'credit') ? 'credit' : (($type_lower === 'payment') ? 'payment' : ''); ?>">
-                                        <?php echo htmlspecialchars($type_val); ?>
-                                    </span>
-                                </td>
-                                <td><strong><?php echo htmlspecialchars($cust_val); ?></strong></td>
-                                <td><?php echo htmlspecialchars($desc_val); ?></td>
-                                <td><strong>₱<?php echo number_format($amt_val, 2); ?></strong></td>
-                                <td>
-                                    <a href="stockout.php?delete_id=<?php echo urlencode($pk_val); ?>" class="action-del" onclick="return confirm('Delete transaction record?')">Delete</a>
+                                    <a href="stockout.php?delete_id=<?= urlencode($tx_id) ?>" class="btn-delete" onclick="return confirm('Are you sure you want to delete this record?');">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 20px;">No transaction records found.</td>
-                        </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
         </div>
-
     </div>
+</div>
 
-    <script>
-        const productsMap = <?php echo json_encode($products_map); ?>;
-        const customersData = <?php echo json_encode($customers_data); ?>;
-        let cart = [];
+<script>
+    const productsMap = <?= json_encode($products_map, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    const customersMap = <?= json_encode($customers_map, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 
-        function updateTxTypeUI() {
-            const txType = document.getElementById('tx_type').value;
-            const customerGroup = document.getElementById('customerGroup');
-            const productScanSection = document.getElementById('productScanSection');
-            const paymentAmountGroup = document.getElementById('paymentAmountGroup');
-            const customerInput = document.getElementById('customer_name');
+    let cart = [];
 
-            if (txType === 'Cash') {
-                customerGroup.style.display = 'none';
-                productScanSection.style.display = 'block';
-                paymentAmountGroup.style.display = 'none';
-                customerInput.value = '';
-                document.getElementById('customer_id_val').value = '';
-            } else if (txType === 'Credit') {
-                customerGroup.style.display = 'block';
-                productScanSection.style.display = 'block';
-                paymentAmountGroup.style.display = 'none';
-                customerInput.placeholder = "Select or type customer name...";
-            } else if (txType === 'Payment') {
-                customerGroup.style.display = 'block';
-                productScanSection.style.display = 'none';
-                paymentAmountGroup.style.display = 'block';
-                customerInput.placeholder = "Select or type customer name...";
-            }
+    function handleTxTypeChange() {
+        const txType = document.getElementById('tx_type').value;
+        const custSection = document.getElementById('customer_section');
+        const paymentSection = document.getElementById('payment_only_section');
+        const itemsSection = document.getElementById('items_section');
+
+        if (txType === 'Cash') {
+            custSection.style.display = 'none';
+            paymentSection.style.display = 'none';
+            itemsSection.style.display = 'block';
+        } else if (txType === 'Credit') {
+            custSection.style.display = 'block';
+            paymentSection.style.display = 'none';
+            itemsSection.style.display = 'block';
+        } else if (txType === 'Payment') {
+            custSection.style.display = 'block';
+            paymentSection.style.display = 'block';
+            itemsSection.style.display = 'none';
         }
+    }
 
-        function syncCustomerId() {
-            const inputVal = document.getElementById('customer_name').value.trim();
-            const val = inputVal.toLowerCase();
-            const hiddenId = document.getElementById('customer_id_val');
-            hiddenId.value = '';
+    document.getElementById('scan_code').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addToCart();
+        }
+    });
 
-            const option = document.querySelector(`#customer_list option[value="${inputVal.replace(/"/g, '\\"')}"]`);
-            if (option && option.dataset.id) {
-                hiddenId.value = option.dataset.id;
-            } else {
-                const match = customersData.find(c => c.name.toLowerCase() === val);
-                if (match && match.id) {
-                    hiddenId.value = match.id;
+    function addToCart() {
+        const codeInput = document.getElementById('scan_code');
+        const qtyInput = document.getElementById('scan_qty');
+        
+        const code = codeInput.value.trim();
+        const qty = parseInt(qtyInput.value) || 1;
+
+        if (!code) return;
+
+        let product = productsMap[code];
+
+        if (!product) {
+            for (let key in productsMap) {
+                if (productsMap[key].name.toLowerCase() === code.toLowerCase()) {
+                    product = productsMap[key];
+                    break;
                 }
             }
         }
 
-        function addToCart() {
-            const codeInput = document.getElementById('scan_code');
-            const qtyInput = document.getElementById('scan_qty');
-            
-            const code = codeInput.value.trim();
-            const qty = parseInt(qtyInput.value) || 1;
-
-            if (!code) return;
-
-            let prod = productsMap[code];
-            if (!prod) {
-                prod = {
-                    id: 0,
-                    code: code,
-                    name: "Item " + code,
-                    price: 0.00,
-                    buy_price: 0.00
-                };
-            }
-
-            const existingIndex = cart.findIndex(i => i.code === code);
-            if (existingIndex > -1) {
-                cart[existingIndex].qty += qty;
-            } else {
-                cart.push({
-                    id: prod.id,
-                    code: prod.code,
-                    name: prod.name,
-                    price: prod.price,
-                    buy_price: prod.buy_price,
-                    qty: qty
-                });
-            }
-
-            codeInput.value = '';
-            qtyInput.value = '1';
-            codeInput.focus();
-            renderCart();
+        if (!product) {
+            alert('Product not found for code/name: ' + code);
+            return;
         }
 
-        function removeFromCart(index) {
-            cart.splice(index, 1);
-            renderCart();
+        const existingIdx = cart.findIndex(item => item.code === product.code || (product.id > 0 && item.id === product.id));
+        if (existingIdx > -1) {
+            cart[existingIdx].qty += qty;
+        } else {
+            cart.push({
+                id: product.id,
+                code: product.code || code,
+                name: product.name,
+                price: parseFloat(product.price),
+                buy_price: parseFloat(product.buy_price || 0),
+                qty: qty
+            });
         }
 
-        function renderCart() {
-            const tbody = document.getElementById('cartTableBody');
-            const payloadInput = document.getElementById('items_payload');
-            const totalDisplay = document.getElementById('cartTotalDisplay');
+        codeInput.value = '';
+        qtyInput.value = '1';
+        codeInput.focus();
 
-            tbody.innerHTML = '';
-            let grandTotal = 0;
+        renderCart();
+    }
 
-            if (cart.length === 0) {
-                tbody.innerHTML = '<tr id="emptyCartRow"><td colspan="5" style="text-align: center; color: #94a3b8; padding: 16px;">No items scanned yet.</td></tr>';
-                totalDisplay.textContent = '₱0.00';
-                payloadInput.value = '[]';
-                return;
-            }
+    function removeFromCart(index) {
+        cart.splice(index, 1);
+        renderCart();
+    }
 
-            cart.forEach((item, index) => {
-                const subtotal = item.qty * item.price;
-                grandTotal += subtotal;
+    function renderCart() {
+        const tbody = document.getElementById('cart_tbody');
+        const totalDisplay = document.getElementById('cart_total_display');
 
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><strong>${item.name}</strong><br><small style="color: #64748b;">${item.code}</small></td>
+        if (cart.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 15px;">Cart is empty</td></tr>';
+            totalDisplay.textContent = '₱0.00';
+            return;
+        }
+
+        let html = '';
+        let total = 0;
+
+        cart.forEach((item, idx) => {
+            const subtotal = item.qty * item.price;
+            total += subtotal;
+            html += `
+                <tr>
+                    <td><strong>${escapeHtml(item.name)}</strong><br><small style="color:#64748b;">${escapeHtml(item.code)}</small></td>
                     <td>${item.qty}</td>
                     <td>₱${item.price.toFixed(2)}</td>
-                    <td><strong>₱${subtotal.toFixed(2)}</strong></td>
-                    <td><button type="button" class="cart-delete-btn" onclick="removeFromCart(${index})">&times;</button></td>
-                `;
-                tbody.appendChild(tr);
-            });
+                    <td>₱${subtotal.toFixed(2)}</td>
+                    <td><button type="button" class="cart-delete-btn" onclick="removeFromCart(${idx})">&times;</button></td>
+                </tr>
+            `;
+        });
 
-            totalDisplay.textContent = `₱${grandTotal.toFixed(2)}`;
-            payloadInput.value = JSON.stringify(cart);
+        tbody.innerHTML = html;
+        totalDisplay.textContent = '₱' + total.toFixed(2);
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function validateAndSubmitForm() {
+        const txType = document.getElementById('tx_type').value;
+        const custInput = document.getElementById('customer_input').value.trim();
+        const custIdVal = document.getElementById('customer_id_val');
+
+        if (custInput && customersMap[custInput.toLowerCase()]) {
+            custIdVal.value = customersMap[custInput.toLowerCase()];
+        } else {
+            custIdVal.value = '';
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
-            updateTxTypeUI();
-        });
-
-        document.getElementById('transactionForm').addEventListener('submit', function(e) {
-            syncCustomerId();
-            const txType = document.getElementById('tx_type').value;
-            const custName = document.getElementById('customer_name').value.trim();
-
-            if (txType === 'Cash') {
-                if (cart.length === 0) {
-                    e.preventDefault();
-                    alert('Please scan or add at least one product to the cart before processing.');
-                    return;
-                }
-            } else if (txType === 'Credit') {
-                if (!custName) {
-                    e.preventDefault();
-                    alert('Please enter or select a Customer Name for Credit transactions.');
-                    document.getElementById('customer_name').focus();
-                    return;
-                }
-                if (cart.length === 0) {
-                    e.preventDefault();
-                    alert('Please scan or add at least one product to the cart before processing.');
-                    return;
-                }
-            } else if (txType === 'Payment') {
-                if (!custName) {
-                    e.preventDefault();
-                    alert('Please enter or select a Customer Name for Payment transactions.');
-                    document.getElementById('customer_name').focus();
-                    return;
-                }
-                const payAmt = parseFloat(document.getElementById('payment_amount').value);
-                if (isNaN(payAmt) || payAmt <= 0) {
-                    e.preventDefault();
-                    alert('Please enter a valid Payment Amount greater than 0.');
-                    document.getElementById('payment_amount').focus();
-                    return;
-                }
+        if (txType === 'Credit' || txType === 'Payment') {
+            if (!custInput) {
+                alert('Please select or enter a Customer Name for ' + txType + ' transactions.');
+                return false;
             }
-        });
-    </script>
+        }
+
+        if (txType === 'Payment') {
+            const payAmt = parseFloat(document.getElementById('payment_amount').value);
+            if (!payAmt || payAmt <= 0) {
+                alert('Please enter a valid payment amount.');
+                return false;
+            }
+        } else {
+            if (cart.length === 0) {
+                alert('Please scan/add at least one item to the cart.');
+                return false;
+            }
+            document.getElementById('items_payload').value = JSON.stringify(cart);
+        }
+
+        return true;
+    }
+
+    handleTxTypeChange();
+</script>
 </body>
 </html>
