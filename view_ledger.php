@@ -31,76 +31,89 @@ try {
     // Fallback customer name
 }
 
-// 2. Safe Dynamic Item / Description Detection
+// 2. Safe Dynamic Schema Detection for Item / Description Lookup
 $itemSelectExpr = "'' AS item_description";
 $joinSql = "";
 
 try {
+    // Inspect transactions table columns
     $txSample = $pdo->query("SELECT * FROM transactions LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-    
-    if ($txSample !== false && !empty($txSample)) {
-        $txCols = array_map('strtolower', array_keys($txSample));
-        
-        // Search for direct description columns in transactions
-        $directCol = null;
-        $possibleCols = ['item_name', 'description', 'product_name', 'item_description', 'particulars', 'item', 'details', 'name'];
-        foreach ($possibleCols as $col) {
+    $txCols = ($txSample !== false) ? array_map('strtolower', array_keys($txSample)) : [];
+
+    // Check if transactions table itself has a description/item column
+    $directDescCol = null;
+    foreach (['description', 'item_name', 'product_name', 'item_description', 'particulars', 'details'] as $col) {
+        if (in_array($col, $txCols)) {
+            $directDescCol = $col;
+            break;
+        }
+    }
+
+    if ($directDescCol !== null) {
+        $itemSelectExpr = 't."' . $directDescCol . '" AS item_description';
+    } else {
+        // Find foreign key or code column in transactions
+        $txKeyCol = null;
+        foreach (['product_id', 'barcode', 'code', 'item_code', 'product_code', 'item_id'] as $col) {
             if (in_array($col, $txCols)) {
-                $directCol = $col;
+                $txKeyCol = $col;
                 break;
             }
         }
-        
-        if ($directCol !== null) {
-            $itemSelectExpr = 't."' . $directCol . '" AS item_description';
-        } else {
-            // Check for barcode/code column to join with items/products table
-            $codeCol = null;
-            foreach (['barcode', 'code', 'item_code', 'product_code', 'product_id'] as $c) {
-                if (in_array($c, $txCols)) {
-                    $codeCol = $c;
-                    break;
+
+        if ($txKeyCol !== null) {
+            // Find existing products or items table
+            $targetTable = null;
+            $targetSample = null;
+
+            foreach (['products', 'items'] as $tbl) {
+                try {
+                    $s = $pdo->query("SELECT * FROM {$tbl} LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                    if ($s !== false) {
+                        $targetTable = $tbl;
+                        $targetSample = $s;
+                        break;
+                    }
+                } catch (Exception $ex) {
+                    // Table does not exist
                 }
             }
-            
-            if ($codeCol !== null) {
-                // Try joining 'items' or 'products' table
-                $joinedTable = null;
-                $itemTableCol = null;
-                
-                try {
-                    $itemSample = $pdo->query("SELECT * FROM items LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                    if ($itemSample !== false) {
-                        $joinedTable = 'items';
-                        $iCols = array_map('strtolower', array_keys($itemSample));
-                        foreach (['item_name', 'description', 'name', 'product_name'] as $ic) {
-                            if (in_array($ic, $iCols)) { $itemTableCol = $ic; break; }
-                        }
+
+            if ($targetTable !== null && $targetSample !== null) {
+                $targetCols = array_map('strtolower', array_keys($targetSample));
+
+                // Find key column in target table that actually exists
+                $targetKeyCol = null;
+                foreach (['code', 'barcode', 'id', 'product_code', 'item_code', 'product_id', 'item_id'] as $tk) {
+                    if (in_array($tk, $targetCols)) {
+                        $targetKeyCol = $tk;
+                        break;
                     }
-                } catch (Exception $e1) {
-                    try {
-                        $prodSample = $pdo->query("SELECT * FROM products LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                        if ($prodSample !== false) {
-                            $joinedTable = 'products';
-                            $pCols = array_map('strtolower', array_keys($prodSample));
-                            foreach (['item_name', 'description', 'name', 'product_name'] as $pc) {
-                                if (in_array($pc, $pCols)) { $itemTableCol = $pc; break; }
-                            }
-                        }
-                    } catch (Exception $e2) {}
                 }
-                
-                if ($joinedTable && $itemTableCol) {
-                    $joinSql = " LEFT JOIN {$joinedTable} i ON t.{$codeCol}::text = i.barcode::text ";
-                    $itemSelectExpr = "COALESCE(i.{$itemTableCol}, t.{$codeCol}::text, '') AS item_description";
+
+                // Find name/description column in target table that actually exists
+                $targetDescCol = null;
+                foreach (['description', 'item_name', 'product_name', 'name', 'title'] as $td) {
+                    if (in_array($td, $targetCols)) {
+                        $targetDescCol = $td;
+                        break;
+                    }
+                }
+
+                if ($targetKeyCol !== null && $targetDescCol !== null) {
+                    $joinSql = " LEFT JOIN {$targetTable} p ON t.{$txKeyCol}::text = p.{$targetKeyCol}::text ";
+                    $itemSelectExpr = "COALESCE(p.{$targetDescCol}, t.{$txKeyCol}::text, '') AS item_description";
                 } else {
-                    $itemSelectExpr = "t.{$codeCol}::text AS item_description";
+                    $itemSelectExpr = "t.{$txKeyCol}::text AS item_description";
                 }
+            } else {
+                $itemSelectExpr = "t.{$txKeyCol}::text AS item_description";
             }
         }
     }
 } catch (Exception $e) {
     $itemSelectExpr = "'' AS item_description";
+    $joinSql = "";
 }
 
 // 3. Fetch Customer Transactions
