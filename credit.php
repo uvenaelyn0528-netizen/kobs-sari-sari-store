@@ -1,35 +1,52 @@
 <?php
-// db.php should contain your Supabase/PostgreSQL PDO connection
 require_once 'db.php'; 
 
-// Fetch total summary metrics for top cards
-$summaryStmt = $pdo->query("
-    SELECT 
-        COALESCE(SUM(CASE WHEN type = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
-        COALESCE(SUM(CASE WHEN type = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
-    FROM transactions
-");
-$summary = $summaryStmt->fetch(PDO::FETCH_ASSOC);
+// Dynamically resolve table column name ('type' vs 'transaction_type') to prevent SQLSTATE[42703]
+$typeCol = 'type';
+try {
+    $colCheck = $pdo->query("
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'transactions' 
+          AND column_name IN ('type', 'transaction_type')
+        LIMIT 1
+    ")->fetchColumn();
+    
+    if ($colCheck) {
+        $typeCol = $colCheck;
+    }
+} catch (Exception $e) {
+    $typeCol = 'type';
+}
 
-$totalStoreCredit = $summary['total_store_credit'];
-$totalPayment = $summary['total_payment'];
+// Fetch total summary metrics
+$summaryQuery = "
+    SELECT 
+        COALESCE(SUM(CASE WHEN \"{$typeCol}\" = 'Credit' THEN amount ELSE 0 END), 0) AS total_store_credit,
+        COALESCE(SUM(CASE WHEN \"{$typeCol}\" = 'Payment' THEN amount ELSE 0 END), 0) AS total_payment
+    FROM transactions
+";
+$summary = $pdo->query($summaryQuery)->fetch(PDO::FETCH_ASSOC);
+
+$totalStoreCredit = $summary['total_store_credit'] ?? 0;
+$totalPayment = $summary['total_payment'] ?? 0;
 $totalBalance = $totalStoreCredit - $totalPayment;
 
-// Fetch customer ledger with explicit GROUP BY on customer_id
-$ledgerStmt = $pdo->query("
+// Fetch customer credit ledger entries
+$ledgerQuery = "
     SELECT 
         c.id AS customer_id,
         c.name AS customer_name,
-        COALESCE(SUM(CASE WHEN t.type = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
-        COALESCE(SUM(CASE WHEN t.type = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
-        (COALESCE(SUM(CASE WHEN t.type = 'Credit' THEN t.amount ELSE 0 END), 0) - 
-         COALESCE(SUM(CASE WHEN t.type = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
+        COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Credit' THEN t.amount ELSE 0 END), 0) AS store_credit,
+        COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Payment' THEN t.amount ELSE 0 END), 0) AS total_payment,
+        (COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Credit' THEN t.amount ELSE 0 END), 0) - 
+         COALESCE(SUM(CASE WHEN t.\"{$typeCol}\" = 'Payment' THEN t.amount ELSE 0 END), 0)) AS total_balance
     FROM customers c
     LEFT JOIN transactions t ON c.id = t.customer_id
     GROUP BY c.id, c.name
     ORDER BY c.name ASC
-");
-$ledgerRows = $ledgerStmt->fetchAll(PDO::FETCH_ASSOC);
+";
+$ledgerRows = $pdo->query($ledgerQuery)->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -85,19 +102,25 @@ $ledgerRows = $ledgerStmt->fetchAll(PDO::FETCH_ASSOC);
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100 text-sm">
-                        <?php foreach ($ledgerRows as $row): ?>
-                            <tr class="hover:bg-gray-50">
-                                <td class="p-3 font-semibold text-gray-800"><?= htmlspecialchars($row['customer_name']) ?></td>
-                                <td class="p-3 font-bold text-blue-600">&#8369;<?= number_format($row['store_credit'], 2) ?></td>
-                                <td class="p-3 font-bold text-emerald-600">&#8369;<?= number_format($row['total_payment'], 2) ?></td>
-                                <td class="p-3 font-bold text-red-600">&#8369;<?= number_format($row['total_balance'], 2) ?></td>
-                                <td class="p-3 text-center">
-                                    <a href="view_ledger.php?customer_id=<?= $row['customer_id'] ?>" class="px-3 py-1 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700">
-                                        View Ledger
-                                    </a>
-                                </td>
+                        <?php if (empty($ledgerRows)): ?>
+                            <tr>
+                                <td colspan="5" class="p-4 text-center text-gray-500">No customer records found.</td>
                             </tr>
-                        <?php endforeach; ?>
+                        <?php else: ?>
+                            <?php foreach ($ledgerRows as $row): ?>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="p-3 font-semibold text-gray-800"><?= htmlspecialchars($row['customer_name']) ?></td>
+                                    <td class="p-3 font-bold text-blue-600">&#8369;<?= number_format($row['store_credit'], 2) ?></td>
+                                    <td class="p-3 font-bold text-emerald-600">&#8369;<?= number_format($row['total_payment'], 2) ?></td>
+                                    <td class="p-3 font-bold text-red-600">&#8369;<?= number_format($row['total_balance'], 2) ?></td>
+                                    <td class="p-3 text-center">
+                                        <a href="view_ledger.php?customer_id=<?= $row['customer_id'] ?>" class="px-3 py-1 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700">
+                                            View Ledger
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -106,13 +129,15 @@ $ledgerRows = $ledgerStmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
     <script>
-        // Client-side search filter
         document.getElementById('searchInput').addEventListener('keyup', function () {
             const filter = this.value.toLowerCase();
             const rows = document.querySelectorAll('#ledgerTable tbody tr');
             rows.forEach(row => {
-                const name = row.children[0].textContent.toLowerCase();
-                row.style.display = name.includes(filter) ? '' : 'none';
+                const nameCell = row.children[0];
+                if (nameCell) {
+                    const name = nameCell.textContent.toLowerCase();
+                    row.style.display = name.includes(filter) ? '' : 'none';
+                }
             });
         });
     </script>
