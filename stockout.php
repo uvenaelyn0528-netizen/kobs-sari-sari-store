@@ -898,6 +898,28 @@ try {
             margin-bottom: 20px;
             font-size: 13px;
         }
+        .panel-header-flex {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+}
+.credit-shortcut-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background-color: #4f46e5;
+    color: #ffffff;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background-color 0.2s ease;
+}
+.credit-shortcut-btn:hover {
+    background-color: #4338ca;
+}
     </style>
 </head>
 <body>
@@ -937,7 +959,12 @@ try {
 <div class="main-container">
     <!-- Left Panel: POS / New Transaction Form -->
     <div class="panel-card">
-        <h2 class="panel-title">New Transaction</h2>
+        <div class="panel-header-flex">
+    <h2 class="panel-title" style="margin: 0;">Recent Transactions</h2>
+    <a href="credit.php" class="credit-shortcut-btn">
+        📋 View Credit List
+    </a>
+</div>
         <form method="POST" action="stockout.php" id="txForm">
             <input type="hidden" name="process_batch_transaction" value="1">
             <input type="hidden" name="items_payload" id="items_payload" value="[]">
