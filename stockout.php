@@ -879,12 +879,13 @@ try {
 
                 <!-- Transaction Type -->
                 <div class="form-group">
-                    <label for="tx_type">Transaction Type</label>
-                    <select name="tx_type" id="tx_type" class="form-control" onchange="updateTxTypeUI()">
-                        <option value="Cash">Cash</option>
-                        <option value="Credit">Credit</option>
-                        <option value="Payment">Payment</option>
-                    </select>
+                   <label for="payment_type" class="block text-xs font-bold text-gray-700 mb-1">Transaction Type</label>
+<select name="payment_type" id="payment_type" class="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500">
+    <option value="Cash">Cash</option>
+    <option value="Credit">Credit</option>
+    <option value="Partial Payment">Partial Payment</option>
+    <option value="Full Payment">Full Payment</option>
+</select>
                 </div>
 
                 <!-- Customer Selection Field (Hidden for Cash) -->
